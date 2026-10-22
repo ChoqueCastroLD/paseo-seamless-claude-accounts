@@ -65,7 +65,7 @@ describe("writeAtomic", () => {
   it("never loosens the mode of the file it replaces", async () => {
     const path = join(f.home, "settings.json");
     await writeFile(path, "{}", { mode: 0o644 });
-    await writeAtomic(path, "{\"a\":1}");
+    await writeAtomic(path, '{"a":1}');
     assert.equal((await stat(path)).mode & 0o777, 0o600);
     await chmod(path, 0o400);
     await writeAtomic(path, "{}");
@@ -104,7 +104,10 @@ describe("Store", () => {
     const saved = await readFile(join(f.home, ".claude-luis-choque", ".credentials.json"), "utf8");
     assert.equal(saved, await readFile(join(f.home, ".claude", ".credentials.json"), "utf8"));
     assert.equal((await stat(join(f.home, ".claude-luis-choque"))).mode & 0o777, 0o700);
-    assert.equal((await readJson(join(f.home, ".claude-luis-choque", ".claude.json"))).oauthAccount.emailAddress, "luis.choque@x.io");
+    assert.equal(
+      (await readJson(join(f.home, ".claude-luis-choque", ".claude.json"))).oauthAccount.emailAddress,
+      "luis.choque@x.io",
+    );
   });
 
   it("does not take a name that is already in use", async () => {
@@ -176,7 +179,11 @@ describe("Store", () => {
     await writeFile(join(f.home, ".claude-pending", ".claude.json"), "{}");
     await mkdir(join(f.home, ".claude-broken"));
     await writeFile(join(f.home, ".claude-broken", ".credentials.json"), "{oops");
-    const code = (id: string) => f.store.use(id).then(() => "ok", (error: StoreError) => error.code);
+    const code = (id: string) =>
+      f.store.use(id).then(
+        () => "ok",
+        (error: StoreError) => error.code,
+      );
     assert.equal(await code("nobody"), "unknown-account");
     assert.equal(await code("pending"), "no-login");
     assert.equal(await code("broken"), "invalid-login");
@@ -199,14 +206,20 @@ describe("Store", () => {
     await Promise.all([f.store.use("b"), f.store.use("a"), f.store.use("b")]);
     const settings = await readJson(join(f.home, ".claude.json"));
     assert.equal(settings.oauthAccount.emailAddress, "b@x.io");
-    assert.equal(parseLogin(await readFile(join(f.home, ".claude", ".credentials.json"), "utf8"))?.accessToken, "at-b@x.io");
+    assert.equal(
+      parseLogin(await readFile(join(f.home, ".claude", ".credentials.json"), "utf8"))?.accessToken,
+      "at-b@x.io",
+    );
   });
 
   it("renames a profile and validates the new name", async () => {
     await addProfile(f.home, "work", { email: "w@x.io" });
     await addProfile(f.home, "home", { email: "h@x.io" });
     assert.equal(await f.store.rename("work", "Office"), "office");
-    assert.deepEqual((await f.store.profiles()).map((profile) => profile.id), ["home", "office"]);
+    assert.deepEqual(
+      (await f.store.profiles()).map((profile) => profile.id),
+      ["home", "office"],
+    );
     await assert.rejects(f.store.rename("office", "home"), { code: "name-taken" });
     await assert.rejects(f.store.rename("office", "../x"), { code: "invalid-name" });
     await assert.rejects(f.store.rename("nobody", "x"), { code: "unknown-account" });
@@ -220,7 +233,10 @@ describe("Store", () => {
     const trash = await f.store.remove("work");
     assert.ok(trash.startsWith(join(f.home, ".local", "share", "seamless-claude-accounts", "trash", ".claude-work-")));
     assert.equal((await readJson(join(trash, ".claude.json"))).oauthAccount.emailAddress, "w@x.io");
-    assert.deepEqual((await f.store.profiles()).map((profile) => profile.id), ["home"]);
+    assert.deepEqual(
+      (await f.store.profiles()).map((profile) => profile.id),
+      ["home"],
+    );
   });
 
   it("only discards profile directories in the home", async () => {

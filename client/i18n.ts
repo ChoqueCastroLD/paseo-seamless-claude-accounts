@@ -2,10 +2,7 @@ import { useSettings } from "@getpaseo/plugin/client";
 import { useMemo } from "react";
 import { preferences, type ErrorCode } from "../shared/contracts";
 
-/**
- * English and Spanish strings. Paseo 0.12 has no translation API for plugins yet, so the
- * language follows the plugin setting, and "auto" follows the device.
- */
+// Paseo 0.12 has no plugin translation API, so the language comes from a plugin setting.
 const en = {
   title: "Claude accounts",
   sidebar: "Claude accounts",
@@ -13,7 +10,8 @@ const en = {
   commandSettings: "Claude account settings",
   slashDescription: "Switch the active Claude account",
   slashHint: "[account]",
-  intro: "Switching rewrites the live login the way `claude login` does. Open chats keep their history and use the new account from their next message.",
+  intro:
+    "Switching rewrites the live login the way `claude login` does. Open chats keep their history and use the new account from their next message.",
   use: "Use",
   switching: "Switching…",
   active: "Active",
@@ -35,6 +33,7 @@ const en = {
   signIn: "Sign in",
   signInAgain: "Sign in again",
   rename: "Rename",
+  actions: "Actions for {name}",
   remove: "Remove",
   nowUsing: "Now using {email}",
   renamed: "Renamed to {id}",
@@ -52,7 +51,6 @@ const en = {
   reasonThreshold: "threshold",
   resumedChats_one: "{count} chat resumed",
   resumedChats_other: "{count} chats resumed",
-  // Login
   loginTitle: "Add a Claude account",
   reloginTitle: "Sign in to {id} again",
   loginName: "Profile name",
@@ -69,21 +67,18 @@ const en = {
   loginFinishing: "Signing in…",
   loginDone: "Added {email}",
   cancel: "Cancel",
-  // Rename and remove
   renameTitle: "Rename {id}",
   renameSave: "Save",
   removeTitle: "Remove {id}?",
-  removeBody: "The profile moves to {trash}. Nothing is deleted and no other account changes. Sign in again later to bring it back.",
+  removeBody:
+    "The profile moves to {trash}. Nothing is deleted and no other account changes. Sign in again later to bring it back.",
   removeConfirm: "Remove",
-  // Timeline
   rowSwitched: "Account limit reached. Switched from {from} to {to}.",
   rowSwitchedThreshold: "Switched from {from} to {to} before the limit.",
   rowExhausted: "Every Claude account is out of allowance.",
   rowNextReset: "The first one frees up {time}.",
-  // Slash command
   slashActive: "Active account: {email}. Use /account <name> to switch.",
-  slashUnknown: "No account matches \"{name}\".",
-  // Settings
+  slashUnknown: 'No account matches "{name}".',
   settingsTitle: "Claude accounts",
   autoSection: "Automatic switching",
   autoSwitchLabel: "Switch when a chat hits its limit",
@@ -103,7 +98,6 @@ const en = {
   languageLabel: "Language",
   languageAuto: "Device language",
   saveFailed: "Could not save: {detail}",
-  // Relative time
   now: "now",
   inMinutes: "in {count} min",
   inHours: "in {count} h",
@@ -111,7 +105,6 @@ const en = {
   minutesAgo: "{count} min ago",
   hoursAgo: "{count} h ago",
   daysAgo: "{count} d ago",
-  // Errors
   "error-unknown-account": "That account no longer exists.",
   "error-no-login": "This profile has no finished sign-in.",
   "error-invalid-login": "The stored sign-in is not usable: {detail}",
@@ -134,7 +127,8 @@ const es: Record<Key, string> = {
   commandSettings: "Ajustes de cuentas de Claude",
   slashDescription: "Cambia la cuenta de Claude activa",
   slashHint: "[cuenta]",
-  intro: "Cambiar reescribe el login activo igual que `claude login`. Los chats abiertos conservan su historial y usan la cuenta nueva desde su siguiente mensaje.",
+  intro:
+    "Cambiar reescribe el login activo igual que `claude login`. Los chats abiertos conservan su historial y usan la cuenta nueva desde su siguiente mensaje.",
   use: "Usar",
   switching: "Cambiando…",
   active: "Activa",
@@ -156,6 +150,7 @@ const es: Record<Key, string> = {
   signIn: "Iniciar sesión",
   signInAgain: "Volver a iniciar sesión",
   rename: "Renombrar",
+  actions: "Acciones de {name}",
   remove: "Quitar",
   nowUsing: "Ahora: {email}",
   renamed: "Renombrada a {id}",
@@ -192,14 +187,15 @@ const es: Record<Key, string> = {
   renameTitle: "Renombrar {id}",
   renameSave: "Guardar",
   removeTitle: "¿Quitar {id}?",
-  removeBody: "El perfil se mueve a {trash}. No se borra nada ni cambia ninguna otra cuenta. Vuelve a iniciar sesión para recuperarla.",
+  removeBody:
+    "El perfil se mueve a {trash}. No se borra nada ni cambia ninguna otra cuenta. Vuelve a iniciar sesión para recuperarla.",
   removeConfirm: "Quitar",
   rowSwitched: "Límite de la cuenta alcanzado. Cambiado de {from} a {to}.",
   rowSwitchedThreshold: "Cambiado de {from} a {to} antes del límite.",
   rowExhausted: "Todas las cuentas de Claude están agotadas.",
   rowNextReset: "La primera se libera {time}.",
   slashActive: "Cuenta activa: {email}. Usa /account <nombre> para cambiar.",
-  slashUnknown: "Ninguna cuenta coincide con \"{name}\".",
+  slashUnknown: 'Ninguna cuenta coincide con "{name}".',
   settingsTitle: "Cuentas de Claude",
   autoSection: "Cambio automático",
   autoSwitchLabel: "Cambiar cuando un chat agote su límite",
@@ -246,11 +242,9 @@ type Values = Record<string, string | number>;
 export interface Strings {
   language: Language;
   t(key: Key, values?: Values): string;
-  /** A count-dependent string: `minutes` picks `minutes_one` or `minutes_other`. */
   plural(base: "minutes" | "resumedChats", count: number): string;
   error(code: ErrorCode, detail: string): string;
-  /** "in 2 h", "5 min ago". */
-  relative(iso: string, now?: number): string;
+  relative(iso: string, now: number): string;
 }
 
 export function deviceLanguage(): Language {
@@ -270,7 +264,7 @@ export function strings(language: Language): Strings {
     t,
     plural: (base, count) => t(`${base}_${count === 1 ? "one" : "other"}` as Key, { count }),
     error: (code, detail) => t(`error-${code}` as Key, { detail }),
-    relative(iso, now = Date.now()) {
+    relative(iso, now) {
       const delta = Date.parse(iso) - now;
       const minutes = Math.round(Math.abs(delta) / 60_000);
       if (minutes < 1) return t("now");
@@ -283,7 +277,6 @@ export function strings(language: Language): Strings {
   };
 }
 
-/** Strings in the language the plugin setting asks for. */
 export function useStrings(): Strings {
   const settings = useSettings(preferences);
   const choice = settings.status === "ready" ? settings.values.language : "auto";

@@ -1,11 +1,8 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
 
-/** How long `claude auth login` gets to print its sign-in link. */
 const URL_TIMEOUT_MS = 20_000;
-/** How long it gets to trade the pasted code for a token. */
 const EXCHANGE_TIMEOUT_MS = 60_000;
-/** A login nobody finishes is abandoned after this. */
 const SESSION_TTL_MS = 15 * 60_000;
 
 const AUTHORIZE_URL = /https:\/\/\S+\/oauth\/authorize\?\S+/;
@@ -27,7 +24,6 @@ interface Session {
   timer: NodeJS.Timeout;
 }
 
-/** The last lines the CLI printed, without the sign-in link, for an error message. */
 function tail(output: string): string {
   return output
     .replace(AUTHORIZE_URL, "")
@@ -40,12 +36,6 @@ function tail(output: string): string {
     .slice(0, 300);
 }
 
-/**
- * Drives `claude auth login` without a terminal. The CLI prints a sign-in link and then reads
- * the code the browser shows from standard input, so the whole login fits in a screen: open the
- * link, paste the code. Credentials land in the profile directory through `CLAUDE_CONFIG_DIR`;
- * this module never sees them.
- */
 export class LoginFlow {
   #sessions = new Map<string, Session>();
   readonly #binary: string;
@@ -119,7 +109,6 @@ export class LoginFlow {
     return { session: id, url };
   }
 
-  /** Hands the browser's code to the CLI and waits for it to store the login. */
   async finish(id: string, code: string): Promise<void> {
     const session = this.#sessions.get(id);
     if (session === undefined || session.child.exitCode !== null) {
@@ -129,7 +118,9 @@ export class LoginFlow {
     clearTimeout(session.timer);
     // One line only: anything after the newline would be read as a second answer.
     session.child.stdin.end(`${code.trim().split(/\s+/)[0] ?? ""}\n`);
-    const timeout = new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), EXCHANGE_TIMEOUT_MS).unref());
+    const timeout = new Promise<"timeout">((resolve) =>
+      setTimeout(() => resolve("timeout"), EXCHANGE_TIMEOUT_MS).unref(),
+    );
     const status = await Promise.race([session.exit, timeout]);
     if (status === "timeout") {
       session.child.kill();
@@ -138,7 +129,6 @@ export class LoginFlow {
     if (status !== 0) throw new LoginError("login-failed", tail(session.output) || `claude exited with ${status}`);
   }
 
-  /** Stops a login in progress. Returns its directory so the caller can clean up. */
   cancel(id: string): string | null {
     const session = this.#sessions.get(id);
     if (session === undefined) return null;

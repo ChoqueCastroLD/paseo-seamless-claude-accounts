@@ -5,14 +5,12 @@ import { SettingsScreen } from "./client/settings";
 import { AccountsItem } from "./client/sidebar";
 import { SwitchNotice } from "./client/timeline-row";
 import { deviceLanguage, strings, type Strings } from "./client/i18n";
-import { listAccounts, preferences, switchRow, useAccount, type Account } from "./shared/contracts";
+import { listAccounts, preferences, switchAccount, switchRow, type Account } from "./shared/contracts";
 
-/** How often the per-account Command Center entries follow accounts being added or removed. */
 const COMMANDS_REFRESH_MS = 5 * 60_000;
 
 type Rpc = PluginCommandCapabilities["rpc"];
 
-/** Strings for callbacks, which run outside React and so cannot use the hook. */
 async function callbackStrings(rpc: Rpc): Promise<Strings> {
   const state = await rpc(settingsRpc(preferences.id).read, {}).catch(() => null);
   const parsed = state?.status === "ready" ? preferences.schema.safeParse(state.values) : null;
@@ -20,7 +18,6 @@ async function callbackStrings(rpc: Rpc): Promise<Strings> {
   return strings(language === "auto" ? deviceLanguage() : language);
 }
 
-/** The account a typed name means: its profile id, or the start of its address. */
 function match(accounts: Account[], query: string): Account | undefined {
   const needle = query.trim().toLowerCase();
   return (
@@ -38,16 +35,23 @@ async function switchTo(rpc: Rpc, query: string): Promise<void> {
   }
   const target = match(accounts, query);
   if (target === undefined) throw new Error(text.t("slashUnknown", { name: query.trim() }));
-  const result = await rpc(useAccount, { id: target.id });
+  const result = await rpc(switchAccount, { id: target.id });
   if (!result.ok) throw new Error(text.error(result.error, result.detail));
 }
 
 export default function contribute(client: PluginClientContext) {
   const text = strings(deviceLanguage());
-  const Screen = (props: PluginScreenProps) => <AccountsScreen {...props} openSettings={(id) => client.openSettings(id)} />;
+  const Screen = (props: PluginScreenProps) => (
+    <AccountsScreen {...props} openSettings={(id) => client.openSettings(id)} />
+  );
 
   client.addScreen({ id: SCREEN_ID, title: text.t("title"), Component: Screen });
-  client.addSettingsScreen({ id: SETTINGS_ID, title: text.t("settingsTitle"), icon: "Users", Component: SettingsScreen });
+  client.addSettingsScreen({
+    id: SETTINGS_ID,
+    title: text.t("settingsTitle"),
+    icon: "Users",
+    Component: SettingsScreen,
+  });
   client.addSidebarHeaderItem({ id: SCREEN_ID, title: text.t("sidebar"), Component: AccountsItem });
   client.addTimelineRenderer({ ...switchRow, Component: SwitchNotice });
 
@@ -76,7 +80,6 @@ export default function contribute(client: PluginClientContext) {
     });
   }
 
-  // One Command Center entry per account, so switching is ⌘K and a few letters of the address.
   let removers: Array<() => void> = [];
   const registerAccounts = async () => {
     const { accounts } = await client.rpc(listAccounts, { refresh: false });
@@ -96,7 +99,8 @@ export default function contribute(client: PluginClientContext) {
         }),
       );
   };
-  const refresh = () => void registerAccounts().catch((error: unknown) => console.warn("[seamless-claude-accounts]", error));
+  const refresh = () =>
+    void registerAccounts().catch((error: unknown) => console.warn("[seamless-claude-accounts]", error));
   refresh();
   const timer = setInterval(refresh, COMMANDS_REFRESH_MS);
 

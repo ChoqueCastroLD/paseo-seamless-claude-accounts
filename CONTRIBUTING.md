@@ -8,7 +8,7 @@ Thanks for helping. Bug reports, fixes and features are all welcome.
 git clone https://github.com/ChoqueCastroLD/paseo-seamless-claude-accounts.git
 cd paseo-seamless-claude-accounts
 npm install
-npm run check
+npm run check   # typecheck, lint, format check and tests
 ```
 
 To try a change in Paseo, install your checkout once with
@@ -32,5 +32,6 @@ edit. `paseo plugin logs seamless-claude-accounts` shows the daemon side output.
 
 1. Branch from `main`.
 2. Run `npm run check`.
-3. Describe the change and how you verified it, and add an entry under *Unreleased* in
+3. Run `npm run format` if the format check fails.
+4. Describe the change and how you verified it, and add an entry under _Unreleased_ in
    `CHANGELOG.md`.

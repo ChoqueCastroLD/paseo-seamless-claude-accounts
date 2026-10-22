@@ -7,7 +7,9 @@ import { createInterface } from "node:readline";
 
 const dir = process.env.CLAUDE_CONFIG_DIR;
 process.stdout.write("Opening browser to sign in…\n");
-process.stdout.write("If the browser didn't open, visit: https://claude.com/cai/oauth/authorize?code=true&state=test\n");
+process.stdout.write(
+  "If the browser didn't open, visit: https://claude.com/cai/oauth/authorize?code=true&state=test\n",
+);
 process.stdout.write("Paste code here if prompted > ");
 
 const lines = createInterface({ input: process.stdin });
@@ -20,7 +22,9 @@ lines.once("line", (code) => {
   const email = match[1];
   writeFileSync(
     join(dir, ".credentials.json"),
-    JSON.stringify({ claudeAiOauth: { accessToken: `at-${email}`, refreshToken: `rt-${email}`, expiresAt: Date.now() + 3_600_000 } }),
+    JSON.stringify({
+      claudeAiOauth: { accessToken: `at-${email}`, refreshToken: `rt-${email}`, expiresAt: Date.now() + 3_600_000 },
+    }),
     { mode: 0o600 },
   );
   writeFileSync(

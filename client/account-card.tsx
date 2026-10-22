@@ -1,33 +1,49 @@
-import { Icon } from "@getpaseo/plugin/client/react-native";
+import { Icon, Modal } from "@getpaseo/plugin/client/react-native";
+import { useState } from "react";
 import { Pressable, Text, View } from "react-native";
 import type { Account } from "../shared/contracts";
 import type { Strings } from "./i18n";
 import { meterColor, type Styles } from "./styles";
 
-/** A sign-in this close to lapsing is worth a warning on the card. */
 const LOGIN_WARNING_MS = 7 * 24 * 60 * 60_000;
-/** A reading older than this is labelled with its age. */
 const STALE_MS = 5 * 60_000;
 
-function Meter({ label, reading, s, text }: { label: string; reading: { percent: number; resetsAt: string | null } | null; s: Styles; text: Strings }) {
-  const percent = reading?.percent ?? null;
+interface MeterProps {
+  label: string;
+  reading: { percent: number; resetsAt: string | null } | null;
+  now: number;
+  s: Styles;
+  text: Strings;
+}
+
+function Meter({ label, reading, now, s, text }: MeterProps) {
+  const percent = reading === null ? null : Math.round(reading.percent);
   return (
-    <View style={s.meter} accessible accessibilityLabel={`${label} ${percent === null ? text.t("noReading") : `${Math.round(percent)}%`}`}>
+    <View
+      style={s.meter}
+      accessible
+      accessibilityRole="progressbar"
+      accessibilityLabel={label}
+      accessibilityValue={percent === null ? { text: text.t("noReading") } : { min: 0, max: 100, now: percent }}
+    >
       <View style={s.meterHead}>
         <Text style={s.meterLabel}>{label}</Text>
-        <Text style={s.meterValue}>{percent === null ? "–" : `${Math.round(percent)}%`}</Text>
+        <Text style={s.meterValue}>{percent === null ? "–" : `${percent}%`}</Text>
       </View>
       <View style={s.track}>
         <View
-          style={{
-            height: 6,
-            borderRadius: 3,
-            width: `${percent ?? 0}%` as `${number}%`,
-            backgroundColor: percent === null ? s.colors.surface2 : meterColor(s.colors, percent),
-          }}
+          style={[
+            s.bar,
+            {
+              width: `${percent ?? 0}%`,
+              backgroundColor: percent === null ? s.colors.surface2 : meterColor(s.colors, percent),
+            },
+          ]}
         />
       </View>
-      <Text style={s.small}>{reading?.resetsAt == null ? " " : text.t("resetsIn", { time: text.relative(reading.resetsAt) })}</Text>
+      {reading?.resetsAt ? (
+        <Text style={s.small}>{text.t("resetsIn", { time: text.relative(reading.resetsAt, now) })}</Text>
+      ) : null}
     </View>
   );
 }
@@ -39,85 +55,166 @@ export interface CardActions {
   onRemove(account: Account): void;
 }
 
-export function AccountCard({ account, busy, s, text, actions }: { account: Account; busy: boolean; s: Styles; text: Strings; actions: CardActions }) {
-  const now = Date.now();
+interface SheetAction {
+  icon: string;
+  label: string;
+  danger?: boolean;
+  run(): void;
+}
+
+function ActionsSheet({
+  title,
+  actions,
+  onClose,
+  s,
+}: {
+  title: string;
+  actions: SheetAction[];
+  onClose(): void;
+  s: Styles;
+}) {
+  return (
+    <Modal title={title} open onOpenChange={(open) => (open ? undefined : onClose())}>
+      <Modal.Content contentContainerStyle={{ padding: 0, gap: 0 }}>
+        {actions.map((action, index) => (
+          <View key={action.label}>
+            {index === 0 ? null : <View style={s.divider} />}
+            <Pressable
+              accessibilityRole="button"
+              onPress={() => {
+                onClose();
+                action.run();
+              }}
+              style={({ pressed }) => [s.sheetRow, pressed ? { backgroundColor: s.colors.surface2 } : null]}
+            >
+              <Icon name={action.icon} size={18} color={action.danger ? s.colors.statusDanger : s.colors.foreground} />
+              <Text style={[s.body, action.danger ? { color: s.colors.statusDanger } : null]}>{action.label}</Text>
+            </Pressable>
+          </View>
+        ))}
+      </Modal.Content>
+    </Modal>
+  );
+}
+
+interface AccountCardProps {
+  account: Account;
+  busy: boolean;
+  now: number;
+  s: Styles;
+  text: Strings;
+  actions: CardActions;
+}
+
+export function AccountCard({ account, busy, now, s, text, actions }: AccountCardProps) {
+  const [menu, setMenu] = useState(false);
   const title = account.email || account.name || text.t("unidentified");
-  const subtitle = [account.id, account.plan.replace(/^claude_/, ""), account.organization].filter((part) => part !== "").join(" · ");
-  const usable = account.status === "ready";
-  const loginEndsSoon = account.loginExpiresAt !== null && Date.parse(account.loginExpiresAt) - now < LOGIN_WARNING_MS;
-  const stale = account.usage !== null && now - Date.parse(account.usage.fetchedAt) > STALE_MS;
+  const subtitle = [account.id, account.plan.replace(/^claude_/, ""), account.organization]
+    .filter((part) => part !== "")
+    .join(" · ");
+  const loginEndsSoon =
+    account.status === "ready" &&
+    account.loginExpiresAt !== null &&
+    Date.parse(account.loginExpiresAt) - now < LOGIN_WARNING_MS;
+  const staleSince =
+    account.usage !== null && now - Date.parse(account.usage.fetchedAt) > STALE_MS ? account.usage.fetchedAt : null;
+
+  const sheet: SheetAction[] = [
+    ...(account.status === "ready" && !account.active
+      ? [{ icon: "RefreshCw", label: text.t("signInAgain"), run: () => actions.onSignIn(account) }]
+      : []),
+    { icon: "Pencil", label: text.t("rename"), run: () => actions.onRename(account) },
+    ...(account.active
+      ? []
+      : [{ icon: "Trash2", label: text.t("remove"), danger: true, run: () => actions.onRemove(account) }]),
+  ];
+
+  const primary = account.active ? null : account.status === "ready" ? (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={`${text.t("use")} ${title}`}
+      accessibilityState={{ disabled: busy, busy }}
+      disabled={busy}
+      onPress={() => actions.onUse(account)}
+      style={[s.primary, s.compact ? s.fill : null, busy ? s.disabled : null]}
+    >
+      <Icon name="ArrowLeftRight" size={16} color={s.colors.accentForeground} />
+      <Text style={s.primaryText}>{busy ? text.t("switching") : text.t("use")}</Text>
+    </Pressable>
+  ) : (
+    <Pressable
+      accessibilityRole="button"
+      onPress={() => actions.onSignIn(account)}
+      style={[s.primary, s.compact ? s.fill : null]}
+    >
+      <Icon name="LogIn" size={16} color={s.colors.accentForeground} />
+      <Text style={s.primaryText}>{text.t("signIn")}</Text>
+    </Pressable>
+  );
+
+  const more = (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={text.t("actions", { name: title })}
+      hitSlop={8}
+      onPress={() => setMenu(true)}
+      style={s.iconButton}
+    >
+      <Icon name="Ellipsis" size={18} color={s.colors.foreground} />
+    </Pressable>
+  );
 
   return (
     <View style={[s.card, account.active ? s.activeCard : null]}>
       <View style={s.row}>
         <View style={[s.avatar, account.active ? s.avatarActive : null]}>
-          <Text style={[s.avatarText, account.active ? s.avatarTextActive : null]}>{title.charAt(0).toUpperCase()}</Text>
+          <Text style={[s.avatarText, account.active ? s.avatarTextActive : null]}>
+            {title.charAt(0).toUpperCase()}
+          </Text>
         </View>
         <View style={s.grow}>
-          <Text style={s.email} numberOfLines={1}>
-            {title}
-          </Text>
+          <View style={s.wrapRow}>
+            <Text style={[s.email, { flexShrink: 1 }]} numberOfLines={1}>
+              {title}
+            </Text>
+            {account.active ? (
+              <View style={s.badge}>
+                <Text style={s.badgeText}>{text.t("active")}</Text>
+              </View>
+            ) : null}
+          </View>
           <Text style={s.muted} numberOfLines={1}>
             {subtitle}
           </Text>
         </View>
-        {account.active ? (
-          <View style={s.badge}>
-            <Text style={s.badgeText}>{text.t("active")}</Text>
-          </View>
-        ) : usable ? (
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel={`${text.t("use")} ${title}`}
-            disabled={busy}
-            onPress={() => actions.onUse(account)}
-            style={[s.primary, busy ? s.disabled : null]}
-          >
-            <Text style={s.primaryText}>{busy ? text.t("switching") : text.t("use")}</Text>
-          </Pressable>
-        ) : (
-          <Pressable accessibilityRole="button" onPress={() => actions.onSignIn(account)} style={s.primary}>
-            <Icon name="LogIn" size={14} color={s.colors.accentForeground} />
-            <Text style={s.primaryText}>{text.t("signIn")}</Text>
-          </Pressable>
-        )}
+        {s.compact ? null : primary}
+        {more}
       </View>
 
       {account.status === "no-login" ? null : (
         <View style={s.meters}>
-          <Meter label={text.t("session")} reading={account.usage?.fiveHour ?? null} s={s} text={text} />
-          <Meter label={text.t("week")} reading={account.usage?.week ?? null} s={s} text={text} />
+          <Meter label={text.t("session")} reading={account.usage?.fiveHour ?? null} now={now} s={s} text={text} />
+          <Meter label={text.t("week")} reading={account.usage?.week ?? null} now={now} s={s} text={text} />
         </View>
       )}
 
       {account.status === "no-login" ? <Text style={s.warning}>{text.t("statusNoLogin")}</Text> : null}
       {account.status === "relogin" ? <Text style={s.danger}>{text.t("statusRelogin")}</Text> : null}
-      {account.exhaustedUntil !== null ? <Text style={s.warning}>{text.t("exhausted", { time: text.relative(account.exhaustedUntil) })}</Text> : null}
-      {account.status === "ready" && loginEndsSoon && account.loginExpiresAt !== null ? (
-        <Text style={s.warning}>{text.t("loginExpiresSoon", { time: text.relative(account.loginExpiresAt) })}</Text>
+      {account.exhaustedUntil !== null ? (
+        <Text style={s.warning}>{text.t("exhausted", { time: text.relative(account.exhaustedUntil, now) })}</Text>
+      ) : null}
+      {loginEndsSoon && account.loginExpiresAt !== null ? (
+        <Text style={s.warning}>
+          {text.t("loginExpiresSoon", { time: text.relative(account.loginExpiresAt, now) })}
+        </Text>
+      ) : null}
+      {staleSince !== null ? (
+        <Text style={s.small}>{text.t("readingAge", { time: text.relative(staleSince, now) })}</Text>
       ) : null}
 
-      <View style={[s.wrapRow, { justifyContent: "space-between" }]}>
-        <Text style={s.small}>{stale && account.usage !== null ? text.t("readingAge", { time: text.relative(account.usage.fetchedAt) }) : ""}</Text>
-        <View style={s.wrapRow}>
-          {account.status === "ready" && !account.active ? (
-            <Pressable accessibilityRole="button" onPress={() => actions.onSignIn(account)} style={s.ghost}>
-              <Icon name="RefreshCw" size={12} color={s.colors.foregroundMuted} />
-              <Text style={s.ghostText}>{text.t("signInAgain")}</Text>
-            </Pressable>
-          ) : null}
-          <Pressable accessibilityRole="button" onPress={() => actions.onRename(account)} style={s.ghost}>
-            <Icon name="Pencil" size={12} color={s.colors.foregroundMuted} />
-            <Text style={s.ghostText}>{text.t("rename")}</Text>
-          </Pressable>
-          {account.active ? null : (
-            <Pressable accessibilityRole="button" onPress={() => actions.onRemove(account)} style={s.ghost}>
-              <Icon name="Trash2" size={12} color={s.colors.foregroundMuted} />
-              <Text style={s.ghostText}>{text.t("remove")}</Text>
-            </Pressable>
-          )}
-        </View>
-      </View>
+      {s.compact && primary !== null ? <View style={s.row}>{primary}</View> : null}
+
+      {menu ? <ActionsSheet title={title} actions={sheet} onClose={() => setMenu(false)} s={s} /> : null}
     </View>
   );
 }

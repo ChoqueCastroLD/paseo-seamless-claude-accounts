@@ -7,7 +7,6 @@ import { peak } from "../shared/usage.ts";
 import { fullUntil, UsageReader, type Usage } from "./usage.ts";
 
 const HISTORY_SIZE = 20;
-/** How long an account that hit a limit is skipped when its reset time is unknown. */
 const DEFAULT_EXHAUSTION_MS = 60 * 60_000;
 
 export type Failure = { ok: false; error: ErrorCode; detail: string };
@@ -19,7 +18,6 @@ function failure(error: unknown): Failure {
   return { ok: false, error: "io", detail: error instanceof Error ? error.message : String(error) };
 }
 
-/** The cache key of an account: who it is, or where it lives while that is unknown. */
 function keyOf(profile: Profile): string {
   return profile.identity?.key ?? `dir:${profile.id}`;
 }
@@ -33,11 +31,8 @@ export class AccountService {
   readonly usage: UsageReader;
   readonly login: LoginFlow;
   #history: HistoryEntry[] = [];
-  /** Account key to the instant it may be picked again after hitting a limit. */
   #exhausted = new Map<string, number>();
-  /** Directories made for a login in progress, which are ours to delete if it fails. */
   #fresh = new Set<string>();
-  /** Login session to the profile directory it signs in. */
   #logins = new Map<string, string>();
 
   constructor(options: { store: Store; usage: UsageReader; binary: string; loginArgs?: string[] }) {
@@ -55,15 +50,15 @@ export class AccountService {
     await this.store.discard(dir);
   }
 
-  /** Every account with its allowance. Saves the live login into its profile on the way. */
-  async list(options: { refresh?: boolean; now?: number } = {}): Promise<{ accounts: Account[]; target: string; history: HistoryEntry[] }> {
+  async list(
+    options: { refresh?: boolean; now?: number } = {},
+  ): Promise<{ accounts: Account[]; target: string; history: HistoryEntry[] }> {
     const now = options.now ?? Date.now();
     const active = await this.store.sync();
     const profiles = await this.store.profiles();
     const accounts = await Promise.all(
       profiles.map(async (profile): Promise<Account> => {
         const isActive = active !== null && profile.id === active.id;
-        // The active profile was just synced, so its login is the one Claude Code holds.
         const login = isActive ? active.login : profile.login;
         const identity = profile.identity ?? (isActive ? active.identity : null);
         const key = keyOf({ ...profile, identity });
@@ -77,7 +72,11 @@ export class AccountService {
           plan: identity?.plan ?? "",
           organization: identity?.organization ?? "",
           status:
-            login === null ? "no-login" : !isActive && login.refreshExpiresAt !== null && login.refreshExpiresAt <= now ? "relogin" : "ready",
+            login === null
+              ? "no-login"
+              : !isActive && login.refreshExpiresAt !== null && login.refreshExpiresAt <= now
+                ? "relogin"
+                : "ready",
           active: isActive,
           usage,
           tokenExpiresAt: iso(login?.expiresAt ?? null),
@@ -86,12 +85,17 @@ export class AccountService {
         };
       }),
     );
-    // Active first, then by most allowance left, so the next pick is the second card.
-    accounts.sort((a, b) => Number(b.active) - Number(a.active) || rank(a, now) - rank(b, now) || a.id.localeCompare(b.id));
+    accounts.sort(
+      (a, b) => Number(b.active) - Number(a.active) || rank(a, now) - rank(b, now) || a.id.localeCompare(b.id),
+    );
     return { accounts, target: this.store.liveCredentials, history: [...this.#history] };
   }
 
-  async use(id: string, reason: HistoryEntry["reason"] = "manual", resumed = 0): Promise<{ ok: true; email: string } | Failure> {
+  async use(
+    id: string,
+    reason: HistoryEntry["reason"] = "manual",
+    resumed = 0,
+  ): Promise<{ ok: true; email: string } | Failure> {
     try {
       const { profile, changed, from } = await this.store.use(id);
       if (changed) {
@@ -108,7 +112,6 @@ export class AccountService {
     this.#history = [entry, ...this.#history].slice(0, HISTORY_SIZE);
   }
 
-  /** Notes how many chats an automatic switch resumed, once they have been. */
   noteResumed(to: string, count: number): void {
     const entry = this.#history.find((candidate) => candidate.to === to && candidate.reason !== "manual");
     if (entry !== undefined) entry.resumed += count;
@@ -130,17 +133,12 @@ export class AccountService {
     }
   }
 
-  /**
-   * Starts a login. `name` is an existing profile to sign in again, or a name for a new one.
-   * Nothing touches the live login: a new account is only used once the user picks it.
-   */
   async startLogin(name: string): Promise<{ ok: true; session: string; url: string; id: string } | Failure> {
     const id = slug(name);
     if (id === null) return failure(new StoreError("invalid-name", `invalid profile name: ${name}`));
     try {
       const active = await this.store.sync();
-      // Signing the live profile in again would leave two logins of one account fighting over
-      // the refresh token. Switch away first.
+      // Two logins of one account would invalidate each other's refresh token.
       if (active?.id === id) throw new StoreError("active-account", `${id} is the account in use`);
       const existing = (await this.store.profiles()).find((profile) => profile.id === id);
       const dir = await this.store.prepare(id);
@@ -166,7 +164,10 @@ export class AccountService {
       const profiles = await this.store.profiles();
       const profile = profiles.find((candidate) => candidate.dir === dir);
       if (profile?.login == null) throw new LoginError("login-failed", "claude finished but stored no login");
-      const twin = profiles.find((candidate) => candidate !== profile && candidate.identity !== null && candidate.identity.key === profile.identity?.key);
+      const twin = profiles.find(
+        (candidate) =>
+          candidate !== profile && candidate.identity !== null && candidate.identity.key === profile.identity?.key,
+      );
       if (twin !== undefined && dir !== null && this.#fresh.has(dir)) {
         // The same account under a second name would split its tokens in two.
         await this.#discardFresh(dir);
@@ -186,16 +187,11 @@ export class AccountService {
     if (dir !== null) await this.#discardFresh(dir);
   }
 
-  /** The account Claude Code uses right now, by key and id. */
   async live(): Promise<{ id: string; key: string } | null> {
     const profile = await this.store.sync();
     return profile === null ? null : { id: profile.id, key: keyOf(profile) };
   }
 
-  /**
-   * Marks the live account as used up. The reset instant comes from a fresh reading when the
-   * endpoint answers, else a fixed wait.
-   */
   async markExhausted(key: string, now = Date.now()): Promise<void> {
     const live = await this.store.live();
     let until: string | null = null;
@@ -205,12 +201,9 @@ export class AccountService {
     this.#exhausted.set(key, until === null ? now + DEFAULT_EXHAUSTION_MS : Date.parse(until));
   }
 
-  /**
-   * The account to move to: ready, not the live one, not used up, and with the most allowance
-   * left. `below` additionally requires a known reading under both thresholds, so a preemptive
-   * switch never lands on an account that would trip them straight away.
-   */
-  async pickNext(options: { below?: Thresholds; now?: number } = {}): Promise<{ id: string | null; nextReset: string | null }> {
+  async pickNext(
+    options: { below?: Thresholds; now?: number } = {},
+  ): Promise<{ id: string | null; nextReset: string | null }> {
     const now = options.now ?? Date.now();
     const { accounts } = await this.list({ now });
     const below = options.below;
@@ -237,14 +230,12 @@ export interface Thresholds {
   week: number;
 }
 
-/** Which threshold a reading has reached, checking the 5-hour window first, or null. */
 export function crossed(usage: Usage, limits: Thresholds): "session" | "week" | null {
   if (usage.fiveHour !== null && usage.fiveHour.percent >= limits.session) return "session";
   if (usage.week !== null && usage.week.percent >= limits.week) return "week";
   return null;
 }
 
-/** Lower is a better account to move to. Unknown readings sort after healthy known ones. */
 function rank(account: Account, now: number): number {
   if (account.status !== "ready") return 1_000;
   if (account.exhaustedUntil !== null && Date.parse(account.exhaustedUntil) > now) return 500;

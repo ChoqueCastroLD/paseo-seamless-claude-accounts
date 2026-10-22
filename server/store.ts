@@ -3,23 +3,10 @@ import { chmod, mkdir, readdir, readFile, rename, rm, stat, writeFile } from "no
 import { basename, dirname, join } from "node:path";
 import { PROFILE_NAME, slug } from "../shared/names.ts";
 
-/**
- * Claude Code logins kept as `~/.claude-<id>` profiles, and the one live login they are copied
- * into. Switching rewrites the live credential file, exactly as `claude login` does, so every
- * open session picks the new account on its next request without restarting.
- *
- * Every login always has a profile: the live one is saved back into its own before anything
- * replaces it. That is what keeps a token Claude Code rotated while it was live from being lost,
- * and what makes switching back one click without a new login.
- */
-
 export interface StorePaths {
   home: string;
-  /** Directory whose `.credentials.json` Claude Code reads. `CLAUDE_CONFIG_DIR`, else `~/.claude`. */
   live: string;
-  /** File holding the live `oauthAccount` block: `~/.claude.json`, or inside a custom config dir. */
   liveSettings: string;
-  /** Where removed profiles are moved. */
   trash: string;
 }
 
@@ -34,22 +21,18 @@ export function pathsFor(home: string, env: Record<string, string | undefined> =
   };
 }
 
-/** The OAuth part of `.credentials.json`. Only the fields this plugin reasons about. */
 export interface Login {
   accessToken: string;
   refreshToken: string;
-  /** Epoch ms, or null when the file does not say. */
   expiresAt: number | null;
   refreshExpiresAt: number | null;
 }
 
-/** Who a login belongs to, from the `oauthAccount` block Claude Code caches beside it. */
 export interface Identity {
   email: string;
   name: string;
   plan: string;
   organization: string;
-  /** Account and organization uuids: one person can sit in several organizations. */
   key: string;
 }
 
@@ -60,7 +43,8 @@ export interface Profile {
   identity: Identity | null;
 }
 
-export type StoreErrorCode = "unknown-account" | "no-login" | "invalid-login" | "invalid-name" | "name-taken" | "active-account";
+export type StoreErrorCode =
+  "unknown-account" | "no-login" | "invalid-login" | "invalid-name" | "name-taken" | "active-account";
 
 export class StoreError extends Error {
   readonly code: StoreErrorCode;
@@ -71,7 +55,6 @@ export class StoreError extends Error {
   }
 }
 
-/** A profile directory: `.claude-` then a name. `.claude.json` and `.claude` itself are not. */
 const PROFILE_DIR = /^\.claude-([a-z0-9][a-z0-9_-]{0,47})$/i;
 export function profileDir(paths: StorePaths, id: string): string {
   return join(paths.home, `.claude-${id}`);
@@ -127,7 +110,9 @@ async function readJson(path: string): Promise<Record<string, unknown> | null> {
   if (raw === null) return null;
   try {
     const value = JSON.parse(raw) as unknown;
-    return typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
+    return typeof value === "object" && value !== null && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : null;
   } catch {
     return null;
   }
@@ -142,12 +127,11 @@ async function exists(path: string): Promise<boolean> {
   }
 }
 
-/**
- * Replaces a file so no reader ever sees half of it. Keeps the mode of the file it replaces,
- * never looser than `mode`, because these files hold tokens.
- */
 export async function writeAtomic(path: string, body: string, mode = 0o600): Promise<void> {
-  const previous = await stat(path).then((info) => info.mode & 0o777, () => mode);
+  const previous = await stat(path).then(
+    (info) => info.mode & 0o777,
+    () => mode,
+  );
   const temp = join(dirname(path), `.${basename(path)}.${randomBytes(6).toString("hex")}.tmp`);
   try {
     await writeFile(temp, body, { mode: previous & mode, flag: "wx" });
@@ -159,7 +143,6 @@ export async function writeAtomic(path: string, body: string, mode = 0o600): Pro
   }
 }
 
-/** Rewrites only the `oauthAccount` key of a settings file, keeping everything else as it was. */
 async function writeAccountBlock(path: string, block: unknown): Promise<void> {
   const raw = await readText(path);
   let settings: Record<string, unknown> = {};
@@ -167,7 +150,6 @@ async function writeAccountBlock(path: string, block: unknown): Promise<void> {
     try {
       settings = JSON.parse(raw) as Record<string, unknown>;
     } catch {
-      // Not ours to repair. The login switched; only the displayed address stays stale.
       return;
     }
   }
@@ -176,7 +158,6 @@ async function writeAccountBlock(path: string, block: unknown): Promise<void> {
 }
 
 export class Store {
-  /** Every mutation runs alone, so two quick clicks cannot interleave their writes. */
   #queue: Promise<unknown> = Promise.resolve();
   readonly paths: StorePaths;
 
@@ -194,7 +175,10 @@ export class Store {
     return run;
   }
 
-  async #read(dir: string, settingsPath: string): Promise<{ raw: string | null; login: Login | null; identity: Identity | null; block: unknown }> {
+  async #read(
+    dir: string,
+    settingsPath: string,
+  ): Promise<{ raw: string | null; login: Login | null; identity: Identity | null; block: unknown }> {
     const raw = await readText(join(dir, ".credentials.json"));
     const block = (await readJson(settingsPath))?.oauthAccount;
     return { raw, login: raw === null ? null : parseLogin(raw), identity: parseIdentity(block), block };
@@ -204,31 +188,24 @@ export class Store {
     return this.#read(this.paths.live, this.paths.liveSettings);
   }
 
-  /**
-   * Every `~/.claude-<id>` directory that is a Claude Code config dir: it holds a login, or the
-   * `.claude.json` a login in progress leaves behind.
-   */
   async profiles(): Promise<Profile[]> {
     const names = await readdir(this.paths.home).catch(() => [] as string[]);
     const profiles: Profile[] = [];
     for (const name of names.sort()) {
-      const match = PROFILE_DIR.exec(name);
-      if (match === null) continue;
+      const id = PROFILE_DIR.exec(name)?.[1]?.toLowerCase();
+      if (id === undefined) continue;
       const dir = join(this.paths.home, name);
       if (dir === this.paths.live) continue;
       const hasLogin = await exists(join(dir, ".credentials.json"));
       if (!hasLogin && !(await exists(join(dir, ".claude.json")))) continue;
       const read = await this.#read(dir, join(dir, ".claude.json"));
-      profiles.push({ id: match[1]!.toLowerCase(), dir, login: read.login, identity: read.identity });
+      profiles.push({ id, dir, login: read.login, identity: read.identity });
     }
     return profiles;
   }
 
-  /**
-   * Saves the live login into its profile. Claude Code renews tokens in the live file only, and
-   * a renewal retires the previous refresh token, so a profile that is not kept in step goes
-   * stale and needs a new login. Creates the profile when the live login has none.
-   */
+  // Claude Code renews tokens in the live file only and each renewal retires the previous refresh
+  // token, so the owning profile must be kept current or it will need a new login.
   sync(): Promise<Profile | null> {
     return this.#exclusive(() => this.#sync());
   }
@@ -251,8 +228,7 @@ export class Store {
       return { id, dir, login, identity: live.identity };
     }
 
-    // Copy only forward in time: a profile someone logged into again holds a newer login than
-    // the live one, and must not be overwritten with the older.
+    // Only copy forward: a profile signed in again may hold a newer login than the live one.
     const stored = owner.login;
     const newer = stored === null || (login.expiresAt ?? 0) >= (stored.expiresAt ?? 0);
     if (newer && (stored?.accessToken !== login.accessToken || stored?.refreshToken !== login.refreshToken)) {
@@ -273,10 +249,6 @@ export class Store {
     }
   }
 
-  /**
-   * Makes a profile the live login. The current live login is saved into its own profile first,
-   * then the credential file is replaced in one rename. Returns the identity now live.
-   */
   use(id: string): Promise<{ profile: Profile; changed: boolean; from: Profile | null }> {
     return this.#exclusive(async () => {
       const from = await this.#sync();
@@ -290,21 +262,18 @@ export class Store {
 
       await mkdir(this.paths.live, { recursive: true });
       await writeAtomic(this.liveCredentials, raw);
-      // The account block only names who is signed in, but a stale one shows the previous
-      // address everywhere Claude Code prints it, so it moves with the token.
+      // Without this Claude Code keeps showing the previous account's address.
       const block = (await readJson(join(profile.dir, ".claude.json")))?.oauthAccount;
       if (block !== undefined) await writeAccountBlock(this.paths.liveSettings, block);
 
       if ((await readText(this.liveCredentials)) !== raw) {
-        // Claude Code renewed the old token between our rename and this read. Its write wins
-        // the race, so say so instead of reporting a switch that did not stick.
+        // Claude Code renewed the old token mid-switch and its write won.
         throw new StoreError("invalid-login", "the live login changed while switching; try again");
       }
       return { profile, changed: true, from };
     });
   }
 
-  /** Renames `~/.claude-<id>`. The live login is unaffected: it lives in its own file. */
   rename(id: string, name: string): Promise<string> {
     return this.#exclusive(async () => {
       const next = name.trim().toLowerCase();
@@ -319,7 +288,6 @@ export class Store {
     });
   }
 
-  /** Moves a profile out of `~` into the trash. Refuses the live account: it would come back. */
   remove(id: string): Promise<string> {
     return this.#exclusive(async () => {
       const active = await this.#sync();
@@ -327,13 +295,15 @@ export class Store {
       const profile = (await this.profiles()).find((candidate) => candidate.id === id);
       if (profile === undefined) throw new StoreError("unknown-account", `no profile named ${id}`);
       await mkdir(this.paths.trash, { recursive: true, mode: 0o700 });
-      const target = join(this.paths.trash, `${basename(profile.dir)}-${new Date().toISOString().replace(/[:.]/g, "-")}`);
+      const target = join(
+        this.paths.trash,
+        `${basename(profile.dir)}-${new Date().toISOString().replace(/[:.]/g, "-")}`,
+      );
       await rename(profile.dir, target);
       return target;
     });
   }
 
-  /** A fresh, empty profile directory for a login in progress. Reuses one that has no login. */
   prepare(name: string): Promise<string> {
     return this.#exclusive(async () => {
       const id = name.trim().toLowerCase();
@@ -344,7 +314,6 @@ export class Store {
     });
   }
 
-  /** Deletes a directory `prepare` made for a login that never completed or duplicated another. */
   discard(dir: string): Promise<void> {
     return this.#exclusive(async () => {
       if (dirname(dir) !== this.paths.home || !PROFILE_DIR.test(basename(dir))) return;

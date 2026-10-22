@@ -43,7 +43,7 @@ chat to carry on.
 
 - **One-click switching.** Every open chat moves to the chosen account immediately. Nothing is
   restarted, copied or reloaded.
-- **Automatic failover.** When a chat stops with *"You've hit your session limit"*, the plugin
+- **Automatic failover.** When a chat stops with _"You've hit your session limit"_, the plugin
   moves to the account with the most allowance left and resumes every chat that stopped.
 - **Preemptive thresholds.** Optionally switch before the limit, when the 5-hour window reaches
   one percentage or the 7-day window reaches another, whichever comes first.
@@ -63,12 +63,12 @@ chat to carry on.
 
 ## Requirements
 
-| | |
-| --- | --- |
-| Paseo | 0.12.0 or later, with plugins enabled (**Settings → Plugins**) |
-| Claude Code | Signed in with a Claude subscription (Pro, Max, Team or Enterprise) |
-| Daemon OS | Linux. macOS works when Claude Code stores its login in `~/.claude/.credentials.json` rather than the Keychain. |
-| Node.js | 22.18 or later to run the test suite |
+|             |                                                                                                                 |
+| ----------- | --------------------------------------------------------------------------------------------------------------- |
+| Paseo       | 0.12.0 or later, with plugins enabled (**Settings → Plugins**)                                                  |
+| Claude Code | Signed in with a Claude subscription (Pro, Max, Team or Enterprise)                                             |
+| Daemon OS   | Linux. macOS works when Claude Code stores its login in `~/.claude/.credentials.json` rather than the Keychain. |
+| Node.js     | 22.18 or later to run the test suite                                                                            |
 
 API keys, Bedrock and Vertex logins are not accounts this plugin can switch.
 
@@ -98,12 +98,12 @@ paseo plugin ls
 Open **Claude accounts** from the sidebar, from `⌘K` / `Ctrl+K`, or type `/account` in the
 composer.
 
-| Action | Where |
-| --- | --- |
-| Switch account | **Use** on a card, `⌘K` → *Use: you@example.com*, or `/account work` |
-| Add an account | **Add account**, name the profile, open the link, paste the code |
-| Renew an expired sign-in | **Sign in again** on the card |
-| Rename or remove a profile | The actions at the bottom of each card |
+| Action                        | Where                                                                                |
+| ----------------------------- | ------------------------------------------------------------------------------------ |
+| Switch account                | **Use** on a card, `⌘K` → _Use: you@example.com_, or `/account work`                 |
+| Add an account                | **Add account**, name the profile, open the link, paste the code                     |
+| Renew an expired sign-in      | **Sign in again** on the card                                                        |
+| Rename or remove a profile    | The actions at the bottom of each card                                               |
 | Configure automatic switching | **Settings → Plugins → Seamless Claude Accounts**, or the summary card on the screen |
 
 `/account` without an argument reports the active account. The argument matches a profile name
@@ -119,16 +119,16 @@ shows up as the account `work`.
 
 ## Automatic switching
 
-| Setting | Default | Effect |
-| --- | --- | --- |
-| Switch when a chat hits its limit | On | Moves to the ready account with the most allowance left. Accounts that hit a limit are skipped until their window resets. |
-| Resume the chats that stopped | On | Sends the resume prompt to each chat that stopped at the limit, at most once every 3 minutes per chat. |
-| Resume prompt | `continue` | The message sent to resume a chat. |
-| Switch before the limit | Off | Checks the active account on a timer. |
-| 5-hour window threshold | 90% | Switches when the session window reaches this. *Only at the limit* turns it off. |
-| 7-day window threshold | 95% | Switches when the weekly window reaches this. *Only at the limit* turns it off. |
-| Check usage every | 3 minutes | How often the thresholds are checked. |
-| Language | Device language | English or Spanish. |
+| Setting                           | Default         | Effect                                                                                                                    |
+| --------------------------------- | --------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| Switch when a chat hits its limit | On              | Moves to the ready account with the most allowance left. Accounts that hit a limit are skipped until their window resets. |
+| Resume the chats that stopped     | On              | Sends the resume prompt to each chat that stopped at the limit, at most once every 3 minutes per chat.                    |
+| Resume prompt                     | `continue`      | The message sent to resume a chat.                                                                                        |
+| Switch before the limit           | Off             | Checks the active account on a timer.                                                                                     |
+| 5-hour window threshold           | 90%             | Switches when the session window reaches this. _Only at the limit_ turns it off.                                          |
+| 7-day window threshold            | 95%             | Switches when the weekly window reaches this. _Only at the limit_ turns it off.                                           |
+| Check usage every                 | 3 minutes       | How often the thresholds are checked.                                                                                     |
+| Language                          | Device language | English or Spanish.                                                                                                       |
 
 A preemptive switch only lands on an account that is below both thresholds, so two accounts
 never trade places on every check. When every account is used up, the chat gets a note saying
@@ -208,12 +208,12 @@ paseo plugin reload seamless-claude-accounts
 paseo plugin logs seamless-claude-accounts
 ```
 
-| Path | Runs in | Contents |
-| --- | --- | --- |
-| `index.server.ts`, `server/` | Daemon subprocess | Profile store, usage reader, login flow, failover |
-| `index.client.tsx`, `client/` | Paseo app | Screen, settings, sidebar, dialogs, timeline note, strings |
-| `shared/` | Both | RPC contracts, settings schema, name and usage helpers |
-| `tests/` | Node test runner | Unit and integration tests against temporary home directories and a fake `claude` |
+| Path                          | Runs in           | Contents                                                                          |
+| ----------------------------- | ----------------- | --------------------------------------------------------------------------------- |
+| `index.server.ts`, `server/`  | Daemon subprocess | Profile store, usage reader, login flow, failover                                 |
+| `index.client.tsx`, `client/` | Paseo app         | Screen, settings, sidebar, dialogs, timeline note, strings                        |
+| `shared/`                     | Both              | RPC contracts, settings schema, name and usage helpers                            |
+| `tests/`                      | Node test runner  | Unit and integration tests against temporary home directories and a fake `claude` |
 
 The tests never touch your real `~/.claude`. They run with Node's built-in test runner and type
 stripping, so there are no test dependencies.

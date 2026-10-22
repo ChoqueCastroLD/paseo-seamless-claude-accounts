@@ -39,7 +39,13 @@ describe("hitLimit", () => {
   it("reads the turn's last reply and nothing before the user's message", () => {
     assert.ok(hitLimit({ kind: "completed" }, [{ type: "user_message", text: "go" }, notice]));
     assert.ok(!hitLimit({ kind: "completed" }, [notice, { type: "user_message", text: "go" }]));
-    assert.ok(!hitLimit({ kind: "completed" }, [{ type: "user_message", text: "go" }, notice, { type: "assistant_message", text: "done" }]));
+    assert.ok(
+      !hitLimit({ kind: "completed" }, [
+        { type: "user_message", text: "go" },
+        notice,
+        { type: "assistant_message", text: "done" },
+      ]),
+    );
     assert.ok(hitLimit({ kind: "completed" }, [{ type: "error", message: "You've hit your limit" }]));
   });
 
@@ -48,7 +54,6 @@ describe("hitLimit", () => {
   });
 });
 
-/** Just enough of the Paseo SDK: a timeline per agent, and a record of what was sent. */
 function fakePaseo(timelines: Record<string, Array<{ type: string; text?: string }>>) {
   const sent: Array<[string, string]> = [];
   const rows: Array<[string, Record<string, unknown>]> = [];
@@ -75,7 +80,10 @@ const limited = [
   { type: "user_message", text: "build it" },
   { type: "assistant_message", text: "You've hit your session limit · resets 1am" },
 ];
-const turn = (id: string, provider = "claude") => ({ agent: { id, provider }, outcome: { kind: "completed" } as const });
+const turn = (id: string, provider = "claude") => ({
+  agent: { id, provider },
+  outcome: { kind: "completed" } as const,
+});
 
 describe("Failover", () => {
   let f: Fixture;
@@ -95,22 +103,33 @@ describe("Failover", () => {
     return { s, failover: new Failover(s, async () => prefs) };
   }
 
-  const activeId = async (s: Awaited<ReturnType<typeof setup>>["s"]) => (await s.list()).accounts.find((account) => account.active)?.id;
+  const activeId = async (s: Awaited<ReturnType<typeof setup>>["s"]) =>
+    (await s.list()).accounts.find((account) => account.active)?.id;
 
   it("moves to the account with most allowance and resumes the chat", async () => {
-    const { s, failover } = await setup({ "at-m@x.io": { five: 100, week: 40 }, "at-s@x.io": { five: 10, week: 10 }, "at-b@x.io": { five: 70, week: 10 } });
+    const { s, failover } = await setup({
+      "at-m@x.io": { five: 100, week: 40 },
+      "at-s@x.io": { five: 10, week: 10 },
+      "at-b@x.io": { five: 70, week: 10 },
+    });
     const { paseo, sent, rows } = fakePaseo({ a1: limited });
     await failover.onTurnEnded(turn("a1"), paseo);
     assert.equal(await activeId(s), "spare");
     assert.deepEqual(sent, [["a1", "continue"]]);
-    assert.deepEqual(rows, [["a1", { from: "me", to: "spare", reason: "limit", nextReset: "2030-01-01T05:00:00.000Z" }]]);
+    assert.deepEqual(rows, [
+      ["a1", { from: "me", to: "spare", reason: "limit", nextReset: "2030-01-01T05:00:00.000Z" }],
+    ]);
     const { history } = await s.list();
     assert.equal(history[0]?.reason, "limit");
     assert.equal(history[0]?.resumed, 1);
   });
 
   it("switches once when many chats hit the limit together", async () => {
-    const { s, failover } = await setup({ "at-m@x.io": { five: 100, week: 40 }, "at-s@x.io": { five: 10, week: 10 }, "at-b@x.io": { five: 70, week: 10 } });
+    const { s, failover } = await setup({
+      "at-m@x.io": { five: 100, week: 40 },
+      "at-s@x.io": { five: 10, week: 10 },
+      "at-b@x.io": { five: 70, week: 10 },
+    });
     const { paseo, sent } = fakePaseo({ a1: limited, a2: limited, a3: limited });
     await Promise.all(["a1", "a2", "a3"].map((id) => failover.onTurnEnded(turn(id), paseo)));
     assert.equal(await activeId(s), "spare");
@@ -119,7 +138,11 @@ describe("Failover", () => {
   });
 
   it("leaves a note and does not resume when every account is used up", async () => {
-    const { s, failover } = await setup({ "at-m@x.io": { five: 100, week: 40 }, "at-s@x.io": { five: 100, week: 10 }, "at-b@x.io": { five: 30, week: 100 } });
+    const { s, failover } = await setup({
+      "at-m@x.io": { five: 100, week: 40 },
+      "at-s@x.io": { five: 100, week: 10 },
+      "at-b@x.io": { five: 30, week: 100 },
+    });
     const { paseo, sent, rows } = fakePaseo({ a1: limited });
     await failover.onTurnEnded(turn("a1"), paseo);
     assert.equal(await activeId(s), "me");
@@ -130,7 +153,13 @@ describe("Failover", () => {
 
   it("does nothing for other providers, ordinary turns, or when turned off", async () => {
     const { s, failover } = await setup({ "at-s@x.io": { five: 10, week: 10 } });
-    const { paseo, sent, rows } = fakePaseo({ a1: limited, ok: [{ type: "user_message", text: "hi" }, { type: "assistant_message", text: "hello" }] });
+    const { paseo, sent, rows } = fakePaseo({
+      a1: limited,
+      ok: [
+        { type: "user_message", text: "hi" },
+        { type: "assistant_message", text: "hello" },
+      ],
+    });
     await failover.onTurnEnded(turn("a1", "codex"), paseo);
     await failover.onTurnEnded(turn("ok"), paseo);
     prefs = { ...prefs, autoSwitch: false };
