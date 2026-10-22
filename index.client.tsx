@@ -1,44 +1,107 @@
-import type { PluginClientContext, PluginSidebarItemProps } from "@getpaseo/plugin/client";
-import { SidebarRow } from "@getpaseo/plugin/client/ui";
-import { AccountsScreen } from "./client/screen";
-import { listAccounts, useAccount } from "./shared/accounts";
+import { settingsRpc } from "@getpaseo/plugin";
+import type { PluginClientContext, PluginCommandCapabilities, PluginScreenProps } from "@getpaseo/plugin/client";
+import { AccountsScreen, SCREEN_ID, SETTINGS_ID } from "./client/screen";
+import { SettingsScreen } from "./client/settings";
+import { AccountsItem } from "./client/sidebar";
+import { SwitchNotice } from "./client/timeline-row";
+import { deviceLanguage, strings, type Strings } from "./client/i18n";
+import { listAccounts, preferences, switchRow, useAccount, type Account } from "./shared/contracts";
 
-/** Sidebar entry, so the switch is one click and not a command to remember. */
-function AccountsItem({ currentScreen, openScreen }: PluginSidebarItemProps) {
+/** How often the per-account Command Center entries follow accounts being added or removed. */
+const COMMANDS_REFRESH_MS = 5 * 60_000;
+
+type Rpc = PluginCommandCapabilities["rpc"];
+
+/** Strings for callbacks, which run outside React and so cannot use the hook. */
+async function callbackStrings(rpc: Rpc): Promise<Strings> {
+  const state = await rpc(settingsRpc(preferences.id).read, {}).catch(() => null);
+  const parsed = state?.status === "ready" ? preferences.schema.safeParse(state.values) : null;
+  const language = parsed?.success ? parsed.data.language : "auto";
+  return strings(language === "auto" ? deviceLanguage() : language);
+}
+
+/** The account a typed name means: its profile id, or the start of its address. */
+function match(accounts: Account[], query: string): Account | undefined {
+  const needle = query.trim().toLowerCase();
   return (
-    <SidebarRow icon="Users" active={currentScreen?.screenId === "accounts"} onPress={() => openScreen({ screenId: "accounts" })} />
+    accounts.find((account) => account.id === needle || account.email.toLowerCase() === needle) ??
+    accounts.find((account) => account.id.startsWith(needle) || account.email.toLowerCase().startsWith(needle))
   );
 }
 
+async function switchTo(rpc: Rpc, query: string): Promise<void> {
+  const text = await callbackStrings(rpc);
+  const { accounts } = await rpc(listAccounts, { refresh: false });
+  if (query.trim() === "") {
+    const active = accounts.find((account) => account.active);
+    throw new Error(text.t("slashActive", { email: active?.email || active?.id || "–" }));
+  }
+  const target = match(accounts, query);
+  if (target === undefined) throw new Error(text.t("slashUnknown", { name: query.trim() }));
+  const result = await rpc(useAccount, { id: target.id });
+  if (!result.ok) throw new Error(text.error(result.error, result.detail));
+}
+
 export default function contribute(client: PluginClientContext) {
-  client.addScreen({ id: "accounts", title: "Cuentas Claude", Component: AccountsScreen });
-  client.addSidebarHeaderItem({ id: "accounts", title: "Cuentas Claude", Component: AccountsItem });
+  const text = strings(deviceLanguage());
+  const Screen = (props: PluginScreenProps) => <AccountsScreen {...props} openSettings={(id) => client.openSettings(id)} />;
+
+  client.addScreen({ id: SCREEN_ID, title: text.t("title"), Component: Screen });
+  client.addSettingsScreen({ id: SETTINGS_ID, title: text.t("settingsTitle"), icon: "Users", Component: SettingsScreen });
+  client.addSidebarHeaderItem({ id: SCREEN_ID, title: text.t("sidebar"), Component: AccountsItem });
+  client.addTimelineRenderer({ ...switchRow, Component: SwitchNotice });
+
   client.addCommandCenterItem({
     id: "open-accounts",
-    title: "Cambiar de cuenta Claude",
+    title: text.t("commandOpen"),
     icon: "Users",
     context: "global",
-    onSelect({ openScreen }) {
-      openScreen({ screenId: "accounts" });
-    },
+    onSelect: ({ openScreen }) => openScreen({ screenId: SCREEN_ID }),
   });
-  client.addSlashCommand({
-    name: "cuenta",
-    description: "Cambia la cuenta Claude activa",
-    argumentHint: "[nombre]",
-    context: "agent",
-    async onSubmit({ args, rpc }) {
-      const name = args.trim();
-      const { accounts } = await rpc(listAccounts, {});
-      if (name === "") {
-        const active = accounts.find((account) => account.active);
-        throw new Error(`Cuenta activa: ${active?.email ?? "desconocida"}. Usa /cuenta <nombre>.`);
-      }
-      const match = accounts.find((account) => account.id === name || account.email.startsWith(name));
-      if (match === undefined) throw new Error(`No encontré la cuenta "${name}".`);
-      const result = await rpc(useAccount, { id: match.id });
-      if (!result.ok) throw new Error(result.error);
-    },
+  client.addCommandCenterItem({
+    id: "open-settings",
+    title: text.t("commandSettings"),
+    icon: "Settings",
+    context: "global",
+    onSelect: ({ openSettings }) => openSettings(SETTINGS_ID),
   });
-  return () => {};
+
+  for (const name of ["account", "cuenta"]) {
+    client.addSlashCommand({
+      name,
+      description: text.t("slashDescription"),
+      argumentHint: text.t("slashHint"),
+      context: "workspace",
+      onSubmit: ({ args, rpc }) => switchTo(rpc, args),
+    });
+  }
+
+  // One Command Center entry per account, so switching is ⌘K and a few letters of the address.
+  let removers: Array<() => void> = [];
+  const registerAccounts = async () => {
+    const { accounts } = await client.rpc(listAccounts, { refresh: false });
+    for (const remove of removers) remove();
+    removers = accounts
+      .filter((account) => account.status === "ready")
+      .map((account) =>
+        client.addCommandCenterItem({
+          id: `use-${account.id}`,
+          title: `${text.t("use")}: ${account.email || account.id}`,
+          icon: "UserCheck",
+          context: "global",
+          onSelect: async ({ rpc }) => {
+            await switchTo(rpc, account.id);
+            await registerAccounts();
+          },
+        }),
+      );
+  };
+  const refresh = () => void registerAccounts().catch((error: unknown) => console.warn("[seamless-claude-accounts]", error));
+  refresh();
+  const timer = setInterval(refresh, COMMANDS_REFRESH_MS);
+
+  return () => {
+    clearInterval(timer);
+    for (const remove of removers) remove();
+  };
 }

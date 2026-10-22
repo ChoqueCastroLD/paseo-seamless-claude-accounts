@@ -1,24 +1,45 @@
 # Seamless Claude Accounts
 
-Cambia la cuenta de Claude Code que usa Paseo con un click, sin reiniciar ningún chat.
+Switch the Claude Code account behind every open chat in one click, without restarting any of
+them. When a chat hits its usage limit, the plugin can move to another account and resume the
+chat for you.
 
-Funciona igual que `claude login`: escribe las credenciales de la cuenta elegida en
-`~/.claude/.credentials.json`. Las conversaciones abiertas conservan su historial y pasan a
-facturar el siguiente mensaje contra la cuenta nueva, porque las sesiones releen ese fichero en
-cada petición. El cambio afecta a todas las sesiones a la vez y es inmediato.
+## How it works
 
-Las cuentas se descubren como directorios `~/.claude-*` con su propio `.credentials.json`, más la
-cuenta activa. Para añadir una, inicia sesión en un directorio aparte:
+Each account is a `~/.claude-<name>` profile directory, the kind `CLAUDE_CONFIG_DIR=... claude
+login` creates. Switching copies that profile's login over `~/.claude/.credentials.json`, the
+file every Claude Code session reads, the same way `claude login` does. Open chats keep their
+history and use the new account from their next message. The switch applies to every Claude chat
+on the daemon at once.
 
-```sh
-CLAUDE_CONFIG_DIR=~/.claude-trabajo claude login
-```
+Before each switch the live login is saved back into its own profile, including any token Claude
+Code renewed while it was in use, so switching back never needs a new sign-in. A live login with
+no profile gets one automatically.
 
-Cada tarjeta muestra el correo, el plan y el consumo de la ventana de 5 horas y de 7 días, leído
-del endpoint de uso de Anthropic con el token de esa cuenta. Nada se envía a terceros.
+## Setup
 
-La pantalla se abre desde la barra lateral, desde el Command Center o con `/cuenta <nombre>`.
+Requires Paseo 0.12 or later on a Linux daemon, with Claude Code signed in to a Claude
+subscription. On macOS it works only when Claude Code keeps its login in the credential file
+rather than the Keychain. Existing `~/.claude-*` profiles are found automatically. To add an
+account, use **Add account** on the plugin screen: the daemon runs `claude auth login`, you open
+the link it gives and paste the code back.
 
-Límites: el cambio es global, no por chat; y los textos de la interfaz están en español. Este
-plugin no reutiliza código de `kostilal/paseo-claude-accounts`, pero nace como fork suyo y
-mantiene su atribución.
+## What you get
+
+- A screen with each account's 5-hour and 7-day usage, reset times and sign-in status, plus
+  rename, remove and sign in again.
+- A sidebar row with the active account and how full it is.
+- Command Center entries for every account and `/account <name>` in the composer.
+- Automatic switching when a chat hits its limit, with an optional resume prompt sent to the
+  chats that stopped. A note in each chat records what happened.
+- Optional switching before the limit, at a percentage of the 5-hour window or of the 7-day
+  window, whichever is reached first.
+- English and Spanish.
+
+## Data and permissions
+
+Tokens stay on the daemon machine; the app only receives addresses, plan names and percentages.
+The plugin reads and writes `~/.claude/.credentials.json`, `~/.claude.json` and the
+`~/.claude-*` profiles, all with owner-only permissions. Usage is read from `api.anthropic.com`
+with each account's own token. Removed profiles are moved to
+`~/.local/share/seamless-claude-accounts/trash`, never deleted.

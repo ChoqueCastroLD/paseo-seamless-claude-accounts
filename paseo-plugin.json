@@ -1,6 +1,8 @@
 {
   "id": "seamless-claude-accounts",
   "name": "Seamless Claude Accounts",
-  "description": "Switch the Claude account behind every open chat by rewriting the live credentials, the same way claude login does. No restarts, no lost conversations.",
-  "requirements": { "paseo": ">=0.12.0" }
+  "description": "Switch the Claude account behind every open chat in one click, and fail over to another account automatically when one hits its limit. No restarts, no lost conversations.",
+  "requirements": {
+    "paseo": ">=0.12.0"
+  }
 }
