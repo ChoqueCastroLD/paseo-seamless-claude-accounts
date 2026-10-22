@@ -1,0 +1,6 @@
+{
+  "id": "seamless-claude-accounts",
+  "name": "Seamless Claude Accounts",
+  "description": "Switch the Claude account behind every open chat by rewriting the live credentials, the same way claude login does. No restarts, no lost conversations.",
+  "requirements": { "paseo": ">=0.12.0" }
+}
