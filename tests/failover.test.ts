@@ -100,13 +100,14 @@ describe("Failover", () => {
     await addProfile(f.home, "busy", { email: "b@x.io" });
     await setLive(f.home, { email: "m@x.io" });
     const { service: s } = service(f, byToken);
+    await s.reorder(["me", "spare", "busy"]);
     return { s, failover: new Failover(s, async () => prefs) };
   }
 
   const activeId = async (s: Awaited<ReturnType<typeof setup>>["s"]) =>
     (await s.list()).accounts.find((account) => account.active)?.id;
 
-  it("moves to the account with most allowance and resumes the chat", async () => {
+  it("moves to the next account in priority order and resumes the chat", async () => {
     const { s, failover } = await setup({
       "at-m@x.io": { five: 100, week: 40 },
       "at-s@x.io": { five: 10, week: 10 },
@@ -196,12 +197,14 @@ describe("Failover thresholds", () => {
   });
   afterEach(() => f.cleanup());
 
-  async function run(byToken: Parameters<typeof service>[1]) {
+  async function run(byToken: Parameters<typeof service>[1], order = ["me", "spare"]) {
     await addProfile(f.home, "me", { email: "m@x.io" });
     await addProfile(f.home, "spare", { email: "s@x.io" });
     await setLive(f.home, { email: "m@x.io" });
     const { service: s } = service(f, byToken);
-    return new Failover(s, async () => prefs).checkThresholds();
+    await s.reorder(order);
+    await new Failover(s, async () => prefs).rebalance();
+    return (await s.list()).accounts.find((account) => account.active)?.id;
   }
 
   it("switches when the session window crosses its threshold", async () => {
@@ -213,15 +216,27 @@ describe("Failover thresholds", () => {
   });
 
   it("stays below both thresholds", async () => {
-    assert.equal(await run({ "at-m@x.io": { five: 79, week: 89 }, "at-s@x.io": { five: 5, week: 5 } }), null);
+    assert.equal(await run({ "at-m@x.io": { five: 79, week: 89 }, "at-s@x.io": { five: 5, week: 5 } }), "me");
   });
 
   it("never moves to an account that is past a threshold itself", async () => {
-    assert.equal(await run({ "at-m@x.io": { five: 95, week: 10 }, "at-s@x.io": { five: 5, week: 91 } }), null);
+    assert.equal(await run({ "at-m@x.io": { five: 95, week: 10 }, "at-s@x.io": { five: 5, week: 91 } }), "me");
   });
 
-  it("is off unless enabled", async () => {
+  it("returns to a higher-priority account once it frees up", async () => {
     prefs = { ...prefs, preemptive: false };
-    assert.equal(await run({ "at-m@x.io": { five: 100, week: 100 }, "at-s@x.io": { five: 5, week: 5 } }), null);
+    const usage = { "at-m@x.io": { five: 10, week: 10 }, "at-s@x.io": { five: 5, week: 5 } };
+    assert.equal(await run(usage, ["spare", "me"]), "spare");
+  });
+
+  it("keeps the current account when returning to priority is off", async () => {
+    prefs = { ...prefs, preemptive: false, returnToPriority: false };
+    const usage = { "at-m@x.io": { five: 10, week: 10 }, "at-s@x.io": { five: 5, week: 5 } };
+    assert.equal(await run(usage, ["spare", "me"]), "me");
+  });
+
+  it("does nothing when thresholds and priority are off", async () => {
+    prefs = { ...prefs, preemptive: false, returnToPriority: false };
+    assert.equal(await run({ "at-m@x.io": { five: 100, week: 100 }, "at-s@x.io": { five: 5, week: 5 } }), "me");
   });
 });

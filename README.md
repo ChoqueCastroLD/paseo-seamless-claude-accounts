@@ -20,6 +20,7 @@
 - [Requirements](#requirements)
 - [Installation](#installation)
 - [Usage](#usage)
+- [Priority and projects](#priority-and-projects)
 - [Automatic switching](#automatic-switching)
 - [How it works](#how-it-works)
 - [Security](#security)
@@ -43,6 +44,10 @@ chat to carry on.
 
 - **One-click switching.** Every open chat moves to the chosen account immediately. Nothing is
   restarted, copied or reloaded.
+- **Priority order.** Number your accounts. The first one with allowance left is spent first,
+  and when a higher one frees up again the plugin goes back to it.
+- **Accounts per project.** Keep a work account for the work project only. Its chats use that
+  account first and the shared ones after it runs out; no other project ever touches it.
 - **Automatic failover.** When a chat stops with _"You've hit your session limit"_, the plugin
   moves to the account with the most allowance left and resumes every chat that stopped.
 - **Preemptive thresholds.** Optionally switch before the limit, when the 5-hour window reaches
@@ -103,7 +108,9 @@ composer.
 | Switch account                | **Use** on a card, `⌘K` → _Use: you@example.com_, or `/account work`                 |
 | Add an account                | **Add account**, name the profile, open the link, paste the code                     |
 | Renew an expired sign-in      | **Sign in again** on the card                                                        |
-| Rename or remove a profile    | The actions at the bottom of each card                                               |
+| Change the priority order     | **⋯** on a card → **Move up** / **Move down**                                        |
+| Limit an account to projects  | **⋯** on a card → **Where to use it…**                                               |
+| Rename or remove a profile    | **⋯** on a card                                                                      |
 | Configure automatic switching | **Settings → Plugins → Seamless Claude Accounts**, or the summary card on the screen |
 
 `/account` without an argument reports the active account. The argument matches a profile name
@@ -117,18 +124,43 @@ CLAUDE_CONFIG_DIR=~/.claude-work claude login
 
 shows up as the account `work`.
 
+## Priority and projects
+
+Accounts are numbered. Number 1 is spent first; when it runs out the next one takes over, and
+when number 1 frees up again the plugin switches back to it. The order starts with the account
+already in use, so installing the plugin changes nothing until you reorder.
+
+Each account is either **shared** (the default) or limited to **selected projects**:
+
+| Chats in…                          | Use, in order                              |
+| ---------------------------------- | ------------------------------------------ |
+| A project with accounts of its own | Its own accounts, then the shared accounts |
+| Any other project                  | The shared accounts                        |
+
+For example, with a personal account and a spare shared everywhere, and a company account
+limited to the company project: company chats spend the company account first and fall back to
+the personal one, while every other chat uses only the personal account and the spare.
+
+An account is live in one place at a time. Two copies of one login would each retire the
+other's refresh token, so a shared account in use by a project is skipped elsewhere until that
+project no longer needs it. A project holds a shared account only while it has open chats.
+
+New chats follow a change immediately. Chats that were already open follow it the next time
+their session restarts, because a chat reads its config directory when it starts.
+
 ## Automatic switching
 
-| Setting                           | Default         | Effect                                                                                                                    |
-| --------------------------------- | --------------- | ------------------------------------------------------------------------------------------------------------------------- |
-| Switch when a chat hits its limit | On              | Moves to the ready account with the most allowance left. Accounts that hit a limit are skipped until their window resets. |
-| Resume the chats that stopped     | On              | Sends the resume prompt to each chat that stopped at the limit, at most once every 3 minutes per chat.                    |
-| Resume prompt                     | `continue`      | The message sent to resume a chat.                                                                                        |
-| Switch before the limit           | Off             | Checks the active account on a timer.                                                                                     |
-| 5-hour window threshold           | 90%             | Switches when the session window reaches this. _Only at the limit_ turns it off.                                          |
-| 7-day window threshold            | 95%             | Switches when the weekly window reaches this. _Only at the limit_ turns it off.                                           |
-| Check usage every                 | 3 minutes       | How often the thresholds are checked.                                                                                     |
-| Language                          | Device language | English or Spanish.                                                                                                       |
+| Setting                             | Default         | Effect                                                                                                                            |
+| ----------------------------------- | --------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| Switch when a chat hits its limit   | On              | Moves that chat's project to the next account in priority order. Accounts that hit a limit are skipped until their window resets. |
+| Resume the chats that stopped       | On              | Sends the resume prompt to each chat that stopped at the limit, at most once every 3 minutes per chat.                            |
+| Resume prompt                       | `continue`      | The message sent to resume a chat.                                                                                                |
+| Switch before the limit             | Off             | Checks the active account on a timer.                                                                                             |
+| 5-hour window threshold             | 90%             | Switches when the session window reaches this. _Only at the limit_ turns it off.                                                  |
+| 7-day window threshold              | 95%             | Switches when the weekly window reaches this. _Only at the limit_ turns it off.                                                   |
+| Go back to higher-priority accounts | On              | Switches back to an account earlier in the list once it frees up.                                                                 |
+| Check usage every                   | 3 minutes       | How often the thresholds and the priority order are checked.                                                                      |
+| Language                            | Device language | English or Spanish.                                                                                                               |
 
 A preemptive switch only lands on an account that is below both thresholds, so two accounts
 never trade places on every check. When every account is used up, the chat gets a note saying
@@ -164,7 +196,14 @@ every open chat, history intact
 5. **Failover** listens to Paseo's `agent.turn_ended` hook. The first chat to hit a limit
    switches; chats that hit it in the same moment follow that switch instead of starting another.
 
-`CLAUDE_CONFIG_DIR` set on the daemon is respected: that directory is then the live one.
+6. **Projects with accounts of their own** get a lane: a directory under
+   `~/.local/share/seamless-claude-accounts/lanes/` that links to every entry of `~/.claude`
+   (history, settings, plugins) except the login, which it keeps for itself. A Paseo
+   `agent.session_open` hook starts that project's Claude chats with `CLAUDE_CONFIG_DIR` pointing
+   at the lane, so switching their account is the same one-file rewrite as everywhere else.
+
+`CLAUDE_CONFIG_DIR` set on the daemon is respected: that directory is then the live one. A chat
+started with its own `CLAUDE_CONFIG_DIR` is left alone.
 
 ## Security
 
@@ -184,9 +223,9 @@ See [SECURITY.md](SECURITY.md) to report a vulnerability.
 
 ## Limitations
 
-- **The switch is global.** Every Claude chat on the daemon uses the same account. Per-chat
-  accounts need separate config directories, and therefore restarts, which is the trade-off this
-  plugin exists to avoid.
+- **Accounts follow projects, not single chats.** Every chat in a project uses that project's
+  account. Per-chat accounts would need each chat to restart on every switch.
+- **Open chats adopt a new project rule when they restart.** New chats follow it immediately.
 - **A rare race with token renewal.** If Claude Code renews the old token in the same instant,
   its write can win. The plugin detects this and reports it; switching again fixes it.
 - **macOS Keychain logins are not supported.** The plugin reads and writes the credential file.

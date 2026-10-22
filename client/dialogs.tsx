@@ -3,6 +3,7 @@ import { copyText, Icon, Modal, TextInput, useToast } from "@getpaseo/plugin/cli
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Pressable, Text, View } from "react-native";
 import {
+  assignProjects,
   cancelLogin,
   finishLogin,
   removeAccount,
@@ -316,6 +317,136 @@ export function RemoveDialog({ id, onClose, onDone, s, text }: ProfileDialogProp
             s={s}
             disabled={busy}
             onPress={() => void confirm()}
+          />
+        </View>
+      </Modal.Content>
+    </Modal>
+  );
+}
+
+function Choice({
+  label,
+  hint,
+  selected,
+  multiple = false,
+  onPress,
+  s,
+}: {
+  label: string;
+  hint?: string;
+  selected: boolean;
+  multiple?: boolean;
+  onPress(): void;
+  s: Styles;
+}) {
+  const icon = multiple ? (selected ? "SquareCheckBig" : "Square") : selected ? "CircleDot" : "Circle";
+  return (
+    <Pressable
+      accessibilityRole={multiple ? "checkbox" : "radio"}
+      accessibilityState={multiple ? { checked: selected } : { selected }}
+      onPress={onPress}
+      style={({ pressed }) => [
+        s.sheetRow,
+        { paddingHorizontal: 0, alignItems: hint === undefined ? "center" : "flex-start" },
+        pressed ? { opacity: 0.7 } : null,
+      ]}
+    >
+      <Icon name={icon} size={20} color={selected ? s.colors.accent : s.colors.foregroundMuted} />
+      <View style={s.grow}>
+        <Text style={[s.body, { fontWeight: hint === undefined ? "400" : "600" }]}>{label}</Text>
+        {hint === undefined ? null : <Text style={s.muted}>{hint}</Text>}
+      </View>
+    </Pressable>
+  );
+}
+
+interface WhereDialogProps {
+  id: string;
+  name: string;
+  current: string[];
+  projects: { id: string; name: string }[];
+  onClose(): void;
+  onDone(): void;
+  s: Styles;
+  text: Strings;
+}
+
+export function WhereDialog({ id, name, current, projects, onClose, onDone, s, text }: WhereDialogProps) {
+  const assign = useRpc(assignProjects);
+  const toast = useToast();
+  const [only, setOnly] = useState(current.length > 0);
+  const [chosen, setChosen] = useState(() => new Set(current));
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  function toggle(project: string) {
+    setChosen((previous) => {
+      const next = new Set(previous);
+      if (next.has(project)) next.delete(project);
+      else next.add(project);
+      return next;
+    });
+  }
+
+  async function save() {
+    setBusy(true);
+    const result = await assign({ id, projects: only ? [...chosen] : [] }).catch(transportFailure);
+    setBusy(false);
+    if (!result.ok) return setError(text.error(result.error, result.detail));
+    toast.show(text.t("whereSaved"), { variant: "success" });
+    onDone();
+  }
+
+  const sorted = [...projects].sort((a, b) => a.name.localeCompare(b.name));
+
+  return (
+    <Modal
+      title={text.t("whereTitle", { name })}
+      icon={<Icon name="FolderLock" size={18} color={s.colors.foreground} />}
+      open
+      onOpenChange={(open) => (open ? undefined : onClose())}
+    >
+      <Modal.Content>
+        <View>
+          <Choice
+            label={text.t("whereAll")}
+            hint={text.t("whereAllHint")}
+            selected={!only}
+            onPress={() => setOnly(false)}
+            s={s}
+          />
+          <Choice
+            label={text.t("whereOnly")}
+            hint={text.t("whereOnlyHint")}
+            selected={only}
+            onPress={() => setOnly(true)}
+            s={s}
+          />
+        </View>
+        {only ? (
+          <View style={[s.card, { gap: 0, paddingVertical: 4 }]}>
+            {sorted.length === 0 ? <Text style={s.muted}>{text.t("whereNoProjects")}</Text> : null}
+            {sorted.map((project) => (
+              <Choice
+                key={project.id}
+                label={project.name}
+                multiple
+                selected={chosen.has(project.id)}
+                onPress={() => toggle(project.id)}
+                s={s}
+              />
+            ))}
+          </View>
+        ) : null}
+        <Text style={s.muted}>{text.t("whereNote")}</Text>
+        {error === "" ? null : <Text style={s.danger}>{error}</Text>}
+        <View style={s.dialogActions}>
+          <Button label={text.t("cancel")} kind="secondary" s={s} onPress={onClose} />
+          <Button
+            label={text.t("save")}
+            s={s}
+            disabled={busy || (only && chosen.size === 0)}
+            onPress={() => void save()}
           />
         </View>
       </Modal.Content>

@@ -50,6 +50,8 @@ function Meter({ label, reading, now, s, text }: MeterProps) {
 
 export interface CardActions {
   onUse(account: Account): void;
+  onMove(account: Account, by: -1 | 1): void;
+  onWhere(account: Account): void;
   onSignIn(account: Account): void;
   onRename(account: Account): void;
   onRemove(account: Account): void;
@@ -99,6 +101,8 @@ function ActionsSheet({
 
 interface AccountCardProps {
   account: Account;
+  count: number;
+  projectNames: ReadonlyMap<string, string>;
   busy: boolean;
   now: number;
   s: Styles;
@@ -106,7 +110,7 @@ interface AccountCardProps {
   actions: CardActions;
 }
 
-export function AccountCard({ account, busy, now, s, text, actions }: AccountCardProps) {
+export function AccountCard({ account, count, projectNames, busy, now, s, text, actions }: AccountCardProps) {
   const [menu, setMenu] = useState(false);
   const title = account.email || account.name || text.t("unidentified");
   const subtitle = [account.id, account.plan.replace(/^claude_/, ""), account.organization]
@@ -116,20 +120,37 @@ export function AccountCard({ account, busy, now, s, text, actions }: AccountCar
     account.status === "ready" &&
     account.loginExpiresAt !== null &&
     Date.parse(account.loginExpiresAt) - now < LOGIN_WARNING_MS;
+  const live = account.seat !== null;
+  const projectName = (id: string) => projectNames.get(id) ?? id;
+  const badge =
+    account.seat === null
+      ? null
+      : account.active
+        ? text.t("active")
+        : text.t("inUseIn", { project: projectName(account.seat) });
+  const scope =
+    account.projects.length === 0
+      ? text.t("scopeAll")
+      : text.t("scopeOnly", { projects: account.projects.map(projectName).join(", ") });
   const staleSince =
     account.usage !== null && now - Date.parse(account.usage.fetchedAt) > STALE_MS ? account.usage.fetchedAt : null;
 
   const sheet: SheetAction[] = [
-    ...(account.status === "ready" && !account.active
+    ...(account.priority > 1
+      ? [{ icon: "ArrowUp", label: text.t("moveUp"), run: () => actions.onMove(account, -1) }]
+      : []),
+    ...(account.priority < count
+      ? [{ icon: "ArrowDown", label: text.t("moveDown"), run: () => actions.onMove(account, 1) }]
+      : []),
+    { icon: "FolderLock", label: text.t("whereAction"), run: () => actions.onWhere(account) },
+    ...(account.status === "ready" && !live
       ? [{ icon: "RefreshCw", label: text.t("signInAgain"), run: () => actions.onSignIn(account) }]
       : []),
     { icon: "Pencil", label: text.t("rename"), run: () => actions.onRename(account) },
-    ...(account.active
-      ? []
-      : [{ icon: "Trash2", label: text.t("remove"), danger: true, run: () => actions.onRemove(account) }]),
+    ...(live ? [] : [{ icon: "Trash2", label: text.t("remove"), danger: true, run: () => actions.onRemove(account) }]),
   ];
 
-  const primary = account.active ? null : account.status === "ready" ? (
+  const primary = live ? null : account.status === "ready" ? (
     <Pressable
       accessibilityRole="button"
       accessibilityLabel={`${text.t("use")} ${title}`}
@@ -165,27 +186,41 @@ export function AccountCard({ account, busy, now, s, text, actions }: AccountCar
   );
 
   return (
-    <View style={[s.card, account.active ? s.activeCard : null]}>
+    <View style={[s.card, live ? s.activeCard : null]}>
       <View style={s.row}>
-        <View style={[s.avatar, account.active ? s.avatarActive : null]}>
-          <Text style={[s.avatarText, account.active ? s.avatarTextActive : null]}>
-            {title.charAt(0).toUpperCase()}
-          </Text>
+        <View
+          style={[s.avatar, live ? s.avatarActive : null]}
+          accessible
+          accessibilityLabel={text.t("priorityLabel", { n: account.priority })}
+        >
+          <Text style={[s.avatarText, live ? s.avatarTextActive : null]}>{account.priority}</Text>
         </View>
         <View style={s.grow}>
           <View style={s.wrapRow}>
             <Text style={[s.email, { flexShrink: 1 }]} numberOfLines={1}>
               {title}
             </Text>
-            {account.active ? (
+            {badge === null ? null : (
               <View style={s.badge}>
-                <Text style={s.badgeText}>{text.t("active")}</Text>
+                <Text style={s.badgeText} numberOfLines={1}>
+                  {badge}
+                </Text>
               </View>
-            ) : null}
+            )}
           </View>
           <Text style={s.muted} numberOfLines={1}>
             {subtitle}
           </Text>
+          <View style={[s.wrapRow, { gap: 4 }]}>
+            <Icon
+              name={account.projects.length === 0 ? "Globe" : "FolderLock"}
+              size={12}
+              color={s.colors.foregroundMuted}
+            />
+            <Text style={s.small} numberOfLines={1}>
+              {scope}
+            </Text>
+          </View>
         </View>
         {s.compact ? null : primary}
         {more}

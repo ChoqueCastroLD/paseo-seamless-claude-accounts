@@ -42,7 +42,7 @@ describe("parsing", () => {
       home: "/h",
       live: "/h/.claude",
       liveSettings: "/h/.claude.json",
-      trash: "/h/.local/share/seamless-claude-accounts/trash",
+      data: "/h/.local/share/seamless-claude-accounts",
     });
     const custom = pathsFor("/h", { CLAUDE_CONFIG_DIR: "/srv/claude" });
     assert.equal(custom.live, "/srv/claude");
@@ -145,7 +145,7 @@ describe("Store", () => {
     await addProfile(f.home, "work", { email: "w@x.io" });
     await setLive(f.home, { email: "h@x.io" }, { theme: "dark", projects: { a: 1 } });
 
-    const result = await f.store.use("work");
+    const result = await f.store.install("work");
     assert.equal(result.changed, true);
     assert.equal(result.from?.id, "home");
     const live = await readFile(join(f.home, ".claude", ".credentials.json"), "utf8");
@@ -161,8 +161,8 @@ describe("Store", () => {
     await addProfile(f.home, "home", { email: "h@x.io", expiresAt: 1_000 });
     await addProfile(f.home, "work", { email: "w@x.io" });
     await setLive(f.home, { email: "h@x.io", token: "renewed", expiresAt: 5_000 });
-    await f.store.use("work");
-    await f.store.use("home");
+    await f.store.install("work");
+    await f.store.install("home");
     const live = parseLogin(await readFile(join(f.home, ".claude", ".credentials.json"), "utf8"));
     assert.equal(live?.accessToken, "renewed");
   });
@@ -170,7 +170,7 @@ describe("Store", () => {
   it("reports no change when asked for the account already live", async () => {
     await addProfile(f.home, "home", { email: "h@x.io" });
     await setLive(f.home, { email: "h@x.io" });
-    assert.equal((await f.store.use("home")).changed, false);
+    assert.equal((await f.store.install("home")).changed, false);
   });
 
   it("refuses unknown, empty and malformed profiles", async () => {
@@ -180,7 +180,7 @@ describe("Store", () => {
     await mkdir(join(f.home, ".claude-broken"));
     await writeFile(join(f.home, ".claude-broken", ".credentials.json"), "{oops");
     const code = (id: string) =>
-      f.store.use(id).then(
+      f.store.install(id).then(
         () => "ok",
         (error: StoreError) => error.code,
       );
@@ -195,7 +195,7 @@ describe("Store", () => {
     await addProfile(f.home, "work", { email: "w@x.io" });
     await setLive(f.home, { email: "h@x.io" });
     await writeFile(join(f.home, ".claude.json"), "{corrupt");
-    await f.store.use("work");
+    await f.store.install("work");
     assert.equal(await readFile(join(f.home, ".claude.json"), "utf8"), "{corrupt");
   });
 
@@ -203,7 +203,7 @@ describe("Store", () => {
     await addProfile(f.home, "a", { email: "a@x.io" });
     await addProfile(f.home, "b", { email: "b@x.io" });
     await setLive(f.home, { email: "a@x.io" });
-    await Promise.all([f.store.use("b"), f.store.use("a"), f.store.use("b")]);
+    await Promise.all([f.store.install("b"), f.store.install("a"), f.store.install("b")]);
     const settings = await readJson(join(f.home, ".claude.json"));
     assert.equal(settings.oauthAccount.emailAddress, "b@x.io");
     assert.equal(

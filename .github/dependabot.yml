@@ -4,6 +4,14 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    # Paseo supplies these at runtime; they must match the Paseo release in paseo-plugin.json.
+    ignore:
+      - dependency-name: "@getpaseo/plugin"
+      - dependency-name: react
+      - dependency-name: react-native
+      - dependency-name: "@types/react"
+      - dependency-name: "@tanstack/react-query"
+      - dependency-name: zod
     groups:
       dev-dependencies:
         dependency-type: development

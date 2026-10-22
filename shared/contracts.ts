@@ -22,6 +22,10 @@ export const accountSchema = z.object({
   organization: z.string(),
   status: accountStatus,
   active: z.boolean(),
+  // "default" for the shared config dir, a project id for that project's lane, null when idle.
+  seat: z.string().nullable(),
+  priority: z.number().int(),
+  projects: z.array(z.string()),
   usage: usageSchema.nullable(),
   tokenExpiresAt: z.string().nullable(),
   loginExpiresAt: z.string().nullable(),
@@ -29,10 +33,12 @@ export const accountSchema = z.object({
 });
 export type Account = z.infer<typeof accountSchema>;
 
-export const switchReason = z.enum(["manual", "limit", "threshold"]);
+export const switchReason = z.enum(["manual", "limit", "threshold", "priority"]);
+export type SwitchReason = z.infer<typeof switchReason>;
 
 const historyEntrySchema = z.object({
   at: z.string(),
+  seat: z.string(),
   from: z.string(),
   to: z.string(),
   reason: switchReason,
@@ -51,6 +57,8 @@ export const errorCode = z.enum([
   "login-failed",
   "login-duplicate",
   "claude-missing",
+  "not-allowed",
+  "busy-elsewhere",
   "io",
 ]);
 export type ErrorCode = z.infer<typeof errorCode>;
@@ -66,12 +74,13 @@ export const listAccounts = defineRpc({
     accounts: z.array(accountSchema),
     target: z.string(),
     history: z.array(historyEntrySchema),
+    projects: z.array(z.object({ id: z.string(), name: z.string() })),
   }),
 });
 
 export const switchAccount = defineRpc({
   name: "seamless-claude.use",
-  input: z.object({ id: z.string() }),
+  input: z.object({ id: z.string(), seat: z.string().optional() }),
   output: z.discriminatedUnion("ok", [z.object({ ok: z.literal(true), email: z.string() }), failure]),
 });
 
@@ -85,6 +94,18 @@ export const removeAccount = defineRpc({
   name: "seamless-claude.remove",
   input: z.object({ id: z.string() }),
   output: z.discriminatedUnion("ok", [z.object({ ok: z.literal(true), trash: z.string() }), failure]),
+});
+
+export const reorderAccounts = defineRpc({
+  name: "seamless-claude.reorder",
+  input: z.object({ ids: z.array(z.string()) }),
+  output: z.object({}),
+});
+
+export const assignProjects = defineRpc({
+  name: "seamless-claude.projects",
+  input: z.object({ id: z.string(), projects: z.array(z.string()) }),
+  output: z.discriminatedUnion("ok", [z.object({ ok: z.literal(true) }), failure]),
 });
 
 export const startLogin = defineRpc({
@@ -124,6 +145,7 @@ export const preferences = defineSettings({
     sessionThreshold: z.number().int().min(10).max(100).default(90),
     weekThreshold: z.number().int().min(10).max(100).default(95),
     checkMinutes: z.number().int().min(1).max(60).default(3),
+    returnToPriority: z.boolean().default(true),
     language: z.enum(languages).default("auto"),
   }),
 });

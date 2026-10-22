@@ -12,7 +12,7 @@ async function dictionaries(): Promise<Record<string, Map<string, string>>> {
     const start = source.indexOf(`const ${name}`);
     const body = source.slice(start, source.indexOf("\n};", start));
     return new Map(
-      [...body.matchAll(/^\s+"?([\w-]+)"?: "((?:[^"\\]|\\.)*)",$/gm)].map((match) => [match[1]!, match[2]!]),
+      [...body.matchAll(/^\s+"?([\w-]+)"?:\s+"((?:[^"\\]|\\.)*)",$/gm)].map((match) => [match[1]!, match[2]!]),
     );
   };
   return { en: read("en = {"), es: read("es: Record<Key, string> = {") };

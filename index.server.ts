@@ -1,14 +1,16 @@
 import { accessSync, constants } from "node:fs";
 import { homedir } from "node:os";
 import { delimiter, join } from "node:path";
-import type { PluginServerContext } from "@getpaseo/plugin/server";
+import type { PluginHandlerContext, PluginServerContext } from "@getpaseo/plugin/server";
 import {
   cancelLogin,
   finishLogin,
+  assignProjects,
   listAccounts,
   preferences,
   removeAccount,
   renameAccount,
+  reorderAccounts,
   startLogin,
   switchAccount,
   type Preferences,
@@ -54,8 +56,38 @@ export default function contribute(server: PluginServerContext) {
   };
   const failover = new Failover(service, readPreferences);
 
-  server.handle(listAccounts, ({ refresh }) => service.list({ refresh }));
-  server.handle(switchAccount, ({ id }) => service.use(id));
+  type Paseo = PluginHandlerContext["paseo"];
+  const projectOf = new Map<string, string>();
+  const resolveProject = async (workspaceId: string | null, paseo: Paseo): Promise<string | null> => {
+    if (workspaceId === null) return null;
+    if (!projectOf.has(workspaceId)) {
+      const { entries } = await paseo.workspaces.list();
+      for (const workspace of entries) projectOf.set(workspace.id, workspace.projectId);
+    }
+    return projectOf.get(workspaceId) ?? null;
+  };
+
+  server.handle(listAccounts, async ({ refresh }, { paseo }) => {
+    const [listing, projects, agents] = await Promise.all([
+      service.list({ refresh }),
+      paseo.projects.list(),
+      paseo.agents.list(),
+    ]);
+    const open = agents.entries
+      .filter(({ agent }) => agent.status !== "closed" && agent.archivedAt == null)
+      .map(({ agent }) => agent.id);
+    await service.prune(new Set(open));
+    return {
+      ...listing,
+      projects: projects.projects.map((project) => ({ id: project.projectId, name: project.projectDisplayName })),
+    };
+  });
+  server.handle(switchAccount, ({ id, seat }) => service.use(id, { seat }));
+  server.handle(reorderAccounts, async ({ ids }) => {
+    await service.reorder(ids);
+    return {};
+  });
+  server.handle(assignProjects, ({ id, projects }) => service.assignProjects(id, projects));
   server.handle(renameAccount, ({ id, name }) => service.rename(id, name));
   server.handle(removeAccount, ({ id }) => service.remove(id));
   server.handle(startLogin, ({ name }) => service.startLogin(name));
@@ -66,14 +98,23 @@ export default function contribute(server: PluginServerContext) {
   });
 
   server.on("agent.turn_ended", (event, { paseo }) => failover.onTurnEnded(event, paseo));
+  server.on("agent.closed", (event) => service.detach([event.agent.id]));
+  server.on("agent.archived", (event) => service.detach([event.agent.id]));
+
+  // A project with dedicated accounts gets its own config dir, so its chats can be on another
+  // account than the rest while sharing history, settings and everything else.
+  server.before("agent.session_open", async ({ request }, { paseo }) => {
+    if (request.provider !== "claude") return;
+    return service.openSession(request, await resolveProject(request.workspaceId, paseo));
+  });
 
   let timer: NodeJS.Timeout | null = null;
   const schedule = (prefs: Preferences) => {
     if (timer !== null) clearInterval(timer);
     timer = null;
-    if (!prefs.preemptive) return;
+    if (!prefs.preemptive && !prefs.returnToPriority) return;
     timer = setInterval(() => {
-      failover.checkThresholds().catch((error: unknown) => console.error("threshold check failed:", error));
+      failover.rebalance().catch((error: unknown) => console.error("rebalance failed:", error));
     }, prefs.checkMinutes * 60_000);
     timer.unref();
   };
@@ -82,16 +123,15 @@ export default function contribute(server: PluginServerContext) {
     if (state.status === "ready") schedule(state.values);
   });
 
-  // Claude Code rotates refresh tokens in the live file only; keep the owning profile current.
-  const sync = setInterval(() => {
-    service.store.sync().catch((error: unknown) => console.error("sync failed:", error));
-  }, 5 * 60_000);
-  sync.unref();
-  void service.store.sync().catch((error: unknown) => console.error("sync failed:", error));
+  // Claude Code rotates refresh tokens in the live files only; keep the owning profiles current.
+  const sync = () => void service.list().catch((error: unknown) => console.error("sync failed:", error));
+  const syncTimer = setInterval(sync, 5 * 60_000);
+  syncTimer.unref();
+  sync();
 
   return () => {
     if (timer !== null) clearInterval(timer);
-    clearInterval(sync);
+    clearInterval(syncTimer);
     unsubscribe();
     service.dispose();
   };

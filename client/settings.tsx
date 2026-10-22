@@ -104,11 +104,17 @@ export function SettingsScreen({ theme }: PluginSurfaceProps) {
             disabled={!values.preemptive}
             onValueChange={(value) => save({ weekThreshold: Number(value) })}
           />
+          <SettingsSwitch
+            label={text.t("returnToPriorityLabel")}
+            hint={text.t("returnToPriorityHint")}
+            value={values.returnToPriority}
+            onValueChange={(returnToPriority) => save({ returnToPriority })}
+          />
           <SettingsSelect
             label={text.t("checkMinutesLabel")}
             value={String(values.checkMinutes)}
             options={INTERVALS.map((value) => ({ label: text.plural("minutes", value), value: String(value) }))}
-            disabled={!values.preemptive}
+            disabled={!values.preemptive && !values.returnToPriority}
             onValueChange={(value) => save({ checkMinutes: Number(value) })}
           />
         </SettingsCard>

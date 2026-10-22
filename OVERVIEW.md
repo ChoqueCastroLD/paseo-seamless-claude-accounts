@@ -16,6 +16,16 @@ Before each switch the live login is saved back into its own profile, including 
 Code renewed while it was in use, so switching back never needs a new sign-in. A live login with
 no profile gets one automatically.
 
+## Priority and projects
+
+Accounts are numbered and spent in that order: when the first runs out the next takes over, and
+the plugin goes back to the first once it frees up. An account can also be limited to selected
+projects. Chats in those projects use it first and the shared accounts after it runs out; other
+projects never use it. Such a project gets its own config directory that shares history and
+settings with `~/.claude` and keeps only the login apart. New chats follow these rules at once;
+chats already open follow them after they restart. An account is never live in two places at
+once, because the two copies would invalidate each other's refresh token.
+
 ## Setup
 
 Requires Paseo 0.12 or later on a Linux daemon, with Claude Code signed in to a Claude
@@ -30,6 +40,7 @@ the link it gives and paste the code back.
   rename, remove and sign in again.
 - A sidebar row with the active account and how full it is.
 - Command Center entries for every account and `/account <name>` in the composer.
+- Priority order and per-project accounts, set from each account's menu.
 - Automatic switching when a chat hits its limit, with an optional resume prompt sent to the
   chats that stopped. A note in each chat records what happened.
 - Optional switching before the limit, at a percentage of the 5-hour window or of the 7-day
@@ -39,7 +50,8 @@ the link it gives and paste the code back.
 ## Data and permissions
 
 Tokens stay on the daemon machine; the app only receives addresses, plan names and percentages.
-The plugin reads and writes `~/.claude/.credentials.json`, `~/.claude.json` and the
-`~/.claude-*` profiles, all with owner-only permissions. Usage is read from `api.anthropic.com`
+The plugin reads and writes `~/.claude/.credentials.json`, `~/.claude.json`, the `~/.claude-*`
+profiles and its own directory `~/.local/share/seamless-claude-accounts`, all with owner-only
+permissions. Usage is read from `api.anthropic.com`
 with each account's own token. Removed profiles are moved to
 `~/.local/share/seamless-claude-accounts/trash`, never deleted.

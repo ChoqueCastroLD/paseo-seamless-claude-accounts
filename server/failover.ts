@@ -1,6 +1,6 @@
 import type { PluginHandlerContext, PluginTurnOutcome } from "@getpaseo/plugin/server";
 import { switchRow, type Preferences, type SwitchRow } from "../shared/contracts.ts";
-import { crossed, type AccountService } from "./service.ts";
+import type { AccountService } from "./service.ts";
 
 // "You've hit your session limit · resets 11:30pm". Anchored and short so replies that merely
 // discuss limits never match.
@@ -36,7 +36,7 @@ export function hitLimit(outcome: Outcome, items: readonly Item[]): boolean {
 export class Failover {
   readonly #service: AccountService;
   readonly #preferences: () => Promise<Preferences>;
-  #lastSwitch: { at: number; from: string; to: string | null; nextReset: string | null } | null = null;
+  #lastSwitch = new Map<string, { at: number; from: string; to: string | null; nextReset: string | null }>();
   #resumedAt = new Map<string, number>();
   #queue: Promise<unknown> = Promise.resolve();
 
@@ -62,7 +62,8 @@ export class Failover {
     )
       return;
 
-    const decision = await this.#switchAfterLimit();
+    const seat = await this.#service.seatOfAgent(event.agent.id);
+    const decision = await this.#switchAfterLimit(seat);
     const now = Date.now();
     const recently = this.#resumedAt.get(event.agent.id);
     const resume =
@@ -79,37 +80,35 @@ export class Failover {
     if (!resume) return;
     this.#resumedAt.set(event.agent.id, now);
     await agent.send(prefs.continuePrompt);
-    if (decision.to !== null) this.#service.noteResumed(decision.to, 1);
+    if (decision.to !== null) this.#service.noteResumed(seat, decision.to, 1);
   }
 
-  #switchAfterLimit(): Promise<{ from: string; to: string | null; nextReset: string | null }> {
+  #switchAfterLimit(seat: string): Promise<{ from: string; to: string | null; nextReset: string | null }> {
     const run = this.#queue.then(async () => {
       const now = Date.now();
-      const live = await this.#service.live();
-      const last = this.#lastSwitch;
-      if (last !== null && now - last.at < SETTLE_MS) {
+      const live = await this.#service.current(seat);
+      const last = this.#lastSwitch.get(seat);
+      if (last !== undefined && now - last.at < SETTLE_MS) {
         return { from: last.from, to: last.to === live?.id ? last.to : null, nextReset: last.nextReset };
       }
-      if (live !== null) await this.#service.markExhausted(live.key, now);
-      const next = await this.#service.pickNext({ now });
-      const to = next.id !== null && (await this.#service.use(next.id, "limit")).ok ? next.id : null;
+      if (live !== null) await this.#service.markExhausted(live.id, now);
+      const next = await this.#service.pickNext(seat, { now });
+      const switched = next.id !== null && (await this.#service.use(next.id, { seat, reason: "limit" })).ok;
+      const to = switched ? next.id : null;
       const from = live?.id ?? "";
-      this.#lastSwitch = { at: now, from, to, nextReset: next.nextReset };
+      this.#lastSwitch.set(seat, { at: now, from, to, nextReset: next.nextReset });
       return { from, to, nextReset: next.nextReset };
     });
     this.#queue = run.catch(() => undefined);
     return run;
   }
 
-  async checkThresholds(): Promise<string | null> {
+  async rebalance(): Promise<string[]> {
     const prefs = await this.#preferences();
-    if (!prefs.preemptive) return null;
-    const limits = { session: prefs.sessionThreshold, week: prefs.weekThreshold };
-    const { accounts } = await this.#service.list();
-    const active = accounts.find((account) => account.active);
-    if (active?.usage == null || crossed(active.usage, limits) === null) return null;
-    const next = await this.#service.pickNext({ below: limits });
-    if (next.id === null || !(await this.#service.use(next.id, "threshold")).ok) return null;
-    return next.id;
+    if (!prefs.preemptive && !prefs.returnToPriority) return [];
+    const below = prefs.preemptive ? { session: prefs.sessionThreshold, week: prefs.weekThreshold } : undefined;
+    const run = this.#queue.then(() => this.#service.rebalance({ below, returnToPriority: prefs.returnToPriority }));
+    this.#queue = run.catch(() => undefined);
+    return run;
   }
 }

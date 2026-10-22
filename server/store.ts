@@ -1,5 +1,17 @@
 import { randomBytes } from "node:crypto";
-import { chmod, mkdir, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  copyFile,
+  lstat,
+  mkdir,
+  readdir,
+  readFile,
+  rename,
+  rm,
+  stat,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { PROFILE_NAME, slug } from "../shared/names.ts";
 
@@ -7,7 +19,7 @@ export interface StorePaths {
   home: string;
   live: string;
   liveSettings: string;
-  trash: string;
+  data: string;
 }
 
 export function pathsFor(home: string, env: Record<string, string | undefined> = {}): StorePaths {
@@ -17,7 +29,7 @@ export function pathsFor(home: string, env: Record<string, string | undefined> =
     home,
     live,
     liveSettings: live === join(home, ".claude") ? join(home, ".claude.json") : join(live, ".claude.json"),
-    trash: join(home, ".local", "share", "seamless-claude-accounts", "trash"),
+    data: join(home, ".local", "share", "seamless-claude-accounts"),
   };
 }
 
@@ -42,6 +54,16 @@ export interface Profile {
   login: Login | null;
   identity: Identity | null;
 }
+
+export const DEFAULT_SEAT = "default";
+
+export interface Seat {
+  id: string;
+  dir: string;
+  settings: string;
+}
+
+const LANE_PRIVATE = new Set([".credentials.json", ".claude.json"]);
 
 export type StoreErrorCode =
   "unknown-account" | "no-login" | "invalid-login" | "invalid-name" | "name-taken" | "active-account";
@@ -204,22 +226,34 @@ export class Store {
     return profiles;
   }
 
-  // Claude Code renews tokens in the live file only and each renewal retires the previous refresh
-  // token, so the owning profile must be kept current or it will need a new login.
-  sync(): Promise<Profile | null> {
-    return this.#exclusive(() => this.#sync());
+  get defaultSeat(): Seat {
+    return { id: DEFAULT_SEAT, dir: this.paths.live, settings: this.paths.liveSettings };
   }
 
-  async #sync(): Promise<Profile | null> {
-    const live = await this.live();
+  laneSeat(projectId: string): Seat {
+    const dir = join(this.paths.data, "lanes", projectId.replace(/[^A-Za-z0-9_-]/g, "_"));
+    return { id: projectId, dir, settings: join(dir, ".claude.json") };
+  }
+
+  // Claude Code renews tokens in the live file only and each renewal retires the previous refresh
+  // token, so the owning profile must be kept current or it will need a new login.
+  sync(seat: Seat = this.defaultSeat, owner?: string | null): Promise<Profile | null> {
+    return this.#exclusive(() => this.#sync(seat, owner));
+  }
+
+  async #sync(seat: Seat, ownerId?: string | null): Promise<Profile | null> {
+    const live = await this.#read(seat.dir, seat.settings);
     const login = live.login;
     if (live.raw === null || login === null) return null;
     const profiles = await this.profiles();
     const owner =
-      profiles.find((profile) => live.identity !== null && profile.identity?.key === live.identity.key) ??
-      profiles.find((profile) => profile.login !== null && profile.login.refreshToken === login.refreshToken);
+      ownerId !== undefined
+        ? profiles.find((profile) => profile.id === ownerId)
+        : (profiles.find((profile) => live.identity !== null && profile.identity?.key === live.identity.key) ??
+          profiles.find((profile) => profile.login !== null && profile.login.refreshToken === login.refreshToken));
 
     if (owner === undefined) {
+      if (ownerId !== undefined) return null;
       const id = await this.#freeName(live.identity?.email.split("@")[0] ?? "", profiles);
       const dir = profileDir(this.paths, id);
       await mkdir(dir, { mode: 0o700, recursive: true });
@@ -234,10 +268,32 @@ export class Store {
     if (newer && (stored?.accessToken !== login.accessToken || stored?.refreshToken !== login.refreshToken)) {
       await writeAtomic(join(owner.dir, ".credentials.json"), live.raw);
     }
-    if (live.block !== undefined && owner.identity === null) {
+    if (live.block !== undefined && owner.identity === null && ownerId === undefined) {
       await writeAccountBlock(join(owner.dir, ".claude.json"), live.block);
     }
     return { ...owner, login: newer ? login : stored, identity: owner.identity ?? live.identity };
+  }
+
+  // A lane shares everything in the default config dir, history included, except the login.
+  async #prepareLane(seat: Seat): Promise<void> {
+    await mkdir(seat.dir, { recursive: true, mode: 0o700 });
+    for (const name of await readdir(this.paths.live).catch(() => [] as string[])) {
+      if (LANE_PRIVATE.has(name) || name.endsWith(".tmp") || name.endsWith(".lock")) continue;
+      const link = join(seat.dir, name);
+      if (
+        await lstat(link).then(
+          () => true,
+          () => false,
+        )
+      )
+        continue;
+      await symlink(join(this.paths.live, name), link);
+    }
+    if (!(await exists(seat.settings))) {
+      if (await exists(this.paths.liveSettings)) await copyFile(this.paths.liveSettings, seat.settings);
+      else await writeFile(seat.settings, "{}\n");
+      await chmod(seat.settings, 0o600);
+    }
   }
 
   async #freeName(base: string, profiles: Profile[]): Promise<string> {
@@ -249,9 +305,14 @@ export class Store {
     }
   }
 
-  use(id: string): Promise<{ profile: Profile; changed: boolean; from: Profile | null }> {
+  install(
+    id: string,
+    seat: Seat = this.defaultSeat,
+    owner?: string | null,
+  ): Promise<{ profile: Profile; changed: boolean; from: Profile | null }> {
     return this.#exclusive(async () => {
-      const from = await this.#sync();
+      const lane = seat.id !== DEFAULT_SEAT;
+      const from = await this.#sync(seat, lane ? (owner ?? null) : undefined);
       const profile = (await this.profiles()).find((candidate) => candidate.id === id);
       if (profile === undefined) throw new StoreError("unknown-account", `no profile named ${id}`);
       if (from?.id === profile.id) return { profile, changed: false, from };
@@ -260,17 +321,26 @@ export class Store {
       if (raw === null) throw new StoreError("no-login", `${id} has no stored login`);
       if (parseLogin(raw) === null) throw new StoreError("invalid-login", `${id} holds no Claude login`);
 
-      await mkdir(this.paths.live, { recursive: true });
-      await writeAtomic(this.liveCredentials, raw);
+      if (lane) await this.#prepareLane(seat);
+      else await mkdir(seat.dir, { recursive: true });
+      const credentials = join(seat.dir, ".credentials.json");
+      await writeAtomic(credentials, raw);
       // Without this Claude Code keeps showing the previous account's address.
       const block = (await readJson(join(profile.dir, ".claude.json")))?.oauthAccount;
-      if (block !== undefined) await writeAccountBlock(this.paths.liveSettings, block);
+      if (block !== undefined) await writeAccountBlock(seat.settings, block);
 
-      if ((await readText(this.liveCredentials)) !== raw) {
+      if ((await readText(credentials)) !== raw) {
         // Claude Code renewed the old token mid-switch and its write won.
         throw new StoreError("invalid-login", "the live login changed while switching; try again");
       }
       return { profile, changed: true, from };
+    });
+  }
+
+  release(seat: Seat, owner: string): Promise<void> {
+    return this.#exclusive(async () => {
+      await this.#sync(seat, owner);
+      await rm(join(seat.dir, ".credentials.json"), { force: true });
     });
   }
 
@@ -290,15 +360,13 @@ export class Store {
 
   remove(id: string): Promise<string> {
     return this.#exclusive(async () => {
-      const active = await this.#sync();
+      const active = await this.#sync(this.defaultSeat);
       if (active?.id === id) throw new StoreError("active-account", `${id} is the account in use`);
       const profile = (await this.profiles()).find((candidate) => candidate.id === id);
       if (profile === undefined) throw new StoreError("unknown-account", `no profile named ${id}`);
-      await mkdir(this.paths.trash, { recursive: true, mode: 0o700 });
-      const target = join(
-        this.paths.trash,
-        `${basename(profile.dir)}-${new Date().toISOString().replace(/[:.]/g, "-")}`,
-      );
+      const trash = join(this.paths.data, "trash");
+      await mkdir(trash, { recursive: true, mode: 0o700 });
+      const target = join(trash, `${basename(profile.dir)}-${new Date().toISOString().replace(/[:.]/g, "-")}`);
       await rename(profile.dir, target);
       return target;
     });

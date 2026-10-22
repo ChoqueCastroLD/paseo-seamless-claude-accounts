@@ -4,10 +4,17 @@ import { Icon, useToast } from "@getpaseo/plugin/client/react-native";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { Pressable, ScrollView, Text, View } from "react-native";
-import { listAccounts, preferences, switchAccount, type Account, type HistoryEntry } from "../shared/contracts";
+import {
+  listAccounts,
+  preferences,
+  reorderAccounts,
+  switchAccount,
+  type Account,
+  type HistoryEntry,
+} from "../shared/contracts";
 import { AccountCard } from "./account-card";
 import { useNow } from "./clock";
-import { LoginDialog, RemoveDialog, RenameDialog } from "./dialogs";
+import { LoginDialog, RemoveDialog, RenameDialog, WhereDialog } from "./dialogs";
 import { useStrings, type Strings } from "./i18n";
 import { useStyles, type Styles } from "./styles";
 
@@ -17,7 +24,10 @@ export const SCREEN_ID = "accounts";
 export const SETTINGS_ID = "preferences";
 
 type Dialog =
-  { kind: "login"; profile: string | null } | { kind: "rename"; id: string } | { kind: "remove"; id: string };
+  | { kind: "login"; profile: string | null }
+  | { kind: "rename"; id: string }
+  | { kind: "remove"; id: string }
+  | { kind: "where"; account: Account };
 
 function AutoSwitchSummary({ s, text, onPress }: { s: Styles; text: Strings; onPress(): void }) {
   const settings = useSettings(preferences);
@@ -53,9 +63,27 @@ function AutoSwitchSummary({ s, text, onPress }: { s: Styles; text: Strings; onP
   );
 }
 
-function History({ entries, now, s, text }: { entries: HistoryEntry[]; now: number; s: Styles; text: Strings }) {
+interface HistoryProps {
+  entries: HistoryEntry[];
+  projectNames: ReadonlyMap<string, string>;
+  now: number;
+  s: Styles;
+  text: Strings;
+}
+
+function History({ entries, projectNames, now, s, text }: HistoryProps) {
   if (entries.length === 0) return null;
-  const reason = { manual: text.t("reasonManual"), limit: text.t("reasonLimit"), threshold: text.t("reasonThreshold") };
+  const reason = {
+    manual: text.t("reasonManual"),
+    limit: text.t("reasonLimit"),
+    threshold: text.t("reasonThreshold"),
+    priority: text.t("reasonPriority"),
+  };
+  const describe = (entry: HistoryEntry) => {
+    const line = text.t("historyEntry", { from: entry.from || "–", to: entry.to });
+    if (entry.seat === "default") return line;
+    return text.t("historyIn", { entry: line, project: projectNames.get(entry.seat) ?? entry.seat });
+  };
   return (
     <View style={{ gap: 4 }}>
       <Text style={s.sectionTitle}>{text.t("history")}</Text>
@@ -66,7 +94,7 @@ function History({ entries, now, s, text }: { entries: HistoryEntry[]; now: numb
             <View style={s.historyRow}>
               <View style={s.grow}>
                 <Text style={s.body} numberOfLines={1}>
-                  {text.t("historyEntry", { from: entry.from || "–", to: entry.to })}
+                  {describe(entry)}
                 </Text>
                 <Text style={s.small}>
                   {[reason[entry.reason], entry.resumed > 0 ? text.plural("resumedChats", entry.resumed) : ""]
@@ -95,6 +123,7 @@ export function AccountsScreen({
   const client = useQueryClient();
   const list = useRpc(listAccounts);
   const switchTo = useRpc(switchAccount);
+  const reorder = useRpc(reorderAccounts);
   const [dialog, setDialog] = useState<Dialog | null>(null);
 
   const query = useQuery({
@@ -117,12 +146,43 @@ export function AccountsScreen({
     onError: (error: unknown) => toast.error(text.error("io", String(error))),
   });
 
+  const move = useMutation({
+    mutationFn: (ids: string[]) => reorder({ ids }),
+    onMutate: (ids) => {
+      const previous = client.getQueryData<Awaited<ReturnType<typeof list>>>(ACCOUNTS_QUERY);
+      if (previous !== undefined) {
+        const byId = new Map(previous.accounts.map((account) => [account.id, account]));
+        const accounts = ids.flatMap((id, index) => {
+          const account = byId.get(id);
+          return account === undefined ? [] : [{ ...account, priority: index + 1 }];
+        });
+        client.setQueryData(ACCOUNTS_QUERY, { ...previous, accounts });
+      }
+      return previous;
+    },
+    onError: (error: unknown, _ids, previous) => {
+      if (previous !== undefined) client.setQueryData(ACCOUNTS_QUERY, previous);
+      toast.error(text.error("io", String(error)));
+    },
+    onSettled: () => client.invalidateQueries({ queryKey: ACCOUNTS_QUERY }),
+  });
+
   const close = () => setDialog(null);
   const done = () => {
     setDialog(null);
     void client.invalidateQueries({ queryKey: ACCOUNTS_QUERY });
   };
   const accounts = query.data?.accounts ?? [];
+  const projects = query.data?.projects ?? [];
+  const projectNames = new Map(projects.map((project) => [project.id, project.name]));
+  const shift = (account: Account, by: -1 | 1) => {
+    const ids = accounts.map((entry) => entry.id);
+    const from = ids.indexOf(account.id);
+    const to = from + by;
+    if (from === -1 || to < 0 || to >= ids.length) return;
+    [ids[from], ids[to]] = [ids[to] ?? account.id, account.id];
+    move.mutate(ids);
+  };
 
   return (
     <ScrollView style={s.screen} contentContainerStyle={s.content} keyboardShouldPersistTaps="handled">
@@ -153,6 +213,7 @@ export function AccountsScreen({
           </Pressable>
         </View>
         <Text style={s.muted}>{text.t("intro")}</Text>
+        {accounts.length > 1 ? <Text style={s.muted}>{text.t("orderHint")}</Text> : null}
       </View>
 
       <AutoSwitchSummary s={s} text={text} onPress={() => openSettings(SETTINGS_ID)} />
@@ -165,12 +226,16 @@ export function AccountsScreen({
         <AccountCard
           key={account.id}
           account={account}
+          count={accounts.length}
+          projectNames={projectNames}
           busy={switching.isPending}
           now={now}
           s={s}
           text={text}
           actions={{
             onUse: (target) => switching.mutate(target),
+            onMove: shift,
+            onWhere: (target) => setDialog({ kind: "where", account: target }),
             onSignIn: (target) => setDialog({ kind: "login", profile: target.id }),
             onRename: (target) => setDialog({ kind: "rename", id: target.id }),
             onRemove: (target) => setDialog({ kind: "remove", id: target.id }),
@@ -178,7 +243,7 @@ export function AccountsScreen({
         />
       ))}
 
-      <History entries={query.data?.history ?? []} now={now} s={s} text={text} />
+      <History entries={query.data?.history ?? []} projectNames={projectNames} now={now} s={s} text={text} />
 
       {query.data === undefined ? null : (
         <Text style={s.small} selectable>
@@ -191,6 +256,18 @@ export function AccountsScreen({
       ) : null}
       {dialog?.kind === "rename" ? (
         <RenameDialog id={dialog.id} onClose={close} onDone={done} s={s} text={text} />
+      ) : null}
+      {dialog?.kind === "where" ? (
+        <WhereDialog
+          id={dialog.account.id}
+          name={dialog.account.email || dialog.account.id}
+          current={dialog.account.projects}
+          projects={projects}
+          onClose={close}
+          onDone={done}
+          s={s}
+          text={text}
+        />
       ) : null}
       {dialog?.kind === "remove" ? (
         <RemoveDialog id={dialog.id} onClose={close} onDone={done} s={s} text={text} />
