@@ -1,0 +1,34 @@
+name: Bug report
+description: Something does not work as described
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open Claude accounts
+        2. ...
+    validations:
+      required: true
+  - type: input
+    id: versions
+    attributes:
+      label: Versions
+      description: Plugin, Paseo and Claude Code versions, and the daemon OS.
+      placeholder: plugin 1.1.0, Paseo 0.12.0, Claude Code 2.1.308, Ubuntu 24.04
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Plugin logs
+      description: Output of `paseo plugin logs seamless-claude-accounts`. Remove anything private first.
+      render: text

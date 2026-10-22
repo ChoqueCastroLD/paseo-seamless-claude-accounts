@@ -1,6 +1,13 @@
 import type { PluginSurfaceProps } from "@getpaseo/plugin/client";
 import { useSettings } from "@getpaseo/plugin/client";
-import { SettingsAction, SettingsCard, SettingsInput, SettingsSection, SettingsSelect, SettingsSwitch } from "@getpaseo/plugin/client/ui";
+import {
+  SettingsAction,
+  SettingsCard,
+  SettingsInput,
+  SettingsSection,
+  SettingsSelect,
+  SettingsSwitch,
+} from "@getpaseo/plugin/client/ui";
 import { useState } from "react";
 import { Text } from "react-native";
 import { languages, preferences, type Preferences } from "../shared/contracts";
@@ -19,7 +26,11 @@ export function SettingsScreen({ theme }: PluginSurfaceProps) {
     return (
       <SettingsSection title={text.t("settingsTitle")}>
         <SettingsCard>
-          <SettingsAction label={text.t("saveFailed", { detail: settings.error })} actionLabel="Reset" onPress={() => void settings.reset()} />
+          <SettingsAction
+            label={text.t("saveFailed", { detail: settings.error })}
+            actionLabel="Reset"
+            onPress={() => void settings.reset()}
+          />
         </SettingsCard>
       </SettingsSection>
     );
@@ -27,7 +38,10 @@ export function SettingsScreen({ theme }: PluginSurfaceProps) {
 
   const values = settings.values;
   const save = (patch: Partial<Preferences>) => void settings.save({ ...values, ...patch }, settings.revision);
-  const threshold = (value: number) => ({ label: value === 100 ? text.t("thresholdOff") : `${value}%`, value: String(value) });
+  const threshold = (value: number) => ({
+    label: value === 100 ? text.t("thresholdOff") : `${value}%`,
+    value: String(value),
+  });
   const draft = prompt ?? values.continuePrompt;
 
   return (
@@ -105,13 +119,20 @@ export function SettingsScreen({ theme }: PluginSurfaceProps) {
           <SettingsSelect
             label={text.t("languageLabel")}
             value={values.language}
-            options={languages.map((value) => ({ label: value === "auto" ? text.t("languageAuto") : value === "es" ? "Español" : "English", value }))}
+            options={languages.map((value) => ({
+              label: value === "auto" ? text.t("languageAuto") : value === "es" ? "Español" : "English",
+              value,
+            }))}
             onValueChange={(language) => save({ language })}
           />
         </SettingsCard>
       </SettingsSection>
 
-      {settings.saveError ? <Text style={{ color: theme.colors.statusDanger, fontSize: 12 }}>{text.t("saveFailed", { detail: String(settings.saveError) })}</Text> : null}
+      {settings.saveError ? (
+        <Text style={{ color: theme.colors.statusDanger, fontSize: 12 }}>
+          {text.t("saveFailed", { detail: String(settings.saveError) })}
+        </Text>
+      ) : null}
     </>
   );
 }

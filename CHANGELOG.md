@@ -4,6 +4,21 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [1.1.0] - 2026-10-22
+
+### Changed
+
+- Mobile-first account screen: 44 px touch targets, a full-width switch button and an actions
+  sheet on compact layouts, stacked dialog buttons, and 16 px inputs.
+- Relative times ("resets in 2 h") update on their own.
+- The sidebar row shows the profile name, so long addresses no longer push out the icon.
+- The switch RPC contract is named `switchAccount` so it is not mistaken for a React hook.
+
+### Added
+
+- ESLint (TypeScript strict and React hooks rules), Prettier and EditorConfig, enforced in CI.
+- Issue and pull request templates, and Dependabot.
+
 ## [1.0.0] - 2026-10-22
 
 ### Added
@@ -39,5 +54,6 @@ All notable changes to this project are documented here. The format follows
 
 - First release: switch accounts by rewriting the live credential file.
 
+[1.1.0]: https://github.com/ChoqueCastroLD/paseo-seamless-claude-accounts/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/ChoqueCastroLD/paseo-seamless-claude-accounts/compare/f57c1e4...v1.0.0
 [0.1.0]: https://github.com/ChoqueCastroLD/paseo-seamless-claude-accounts/commit/f57c1e4

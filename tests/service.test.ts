@@ -16,9 +16,20 @@ describe("AccountService.list", () => {
     await addProfile(f.home, "idle", { email: "i@x.io" });
     await addProfile(f.home, "me", { email: "m@x.io" });
     await setLive(f.home, { email: "m@x.io" });
-    const { service: s } = service(f, { "at-b@x.io": { five: 80, week: 10 }, "at-i@x.io": { five: 5, week: 5 }, "at-m@x.io": { five: 50, week: 50 } });
+    const { service: s } = service(f, {
+      "at-b@x.io": { five: 80, week: 10 },
+      "at-i@x.io": { five: 5, week: 5 },
+      "at-m@x.io": { five: 50, week: 50 },
+    });
     const { accounts, target } = await s.list();
-    assert.deepEqual(accounts.map((account) => [account.id, account.active]), [["me", true], ["idle", false], ["busy", false]]);
+    assert.deepEqual(
+      accounts.map((account) => [account.id, account.active]),
+      [
+        ["me", true],
+        ["idle", false],
+        ["busy", false],
+      ],
+    );
     assert.equal(target, join(f.home, ".claude", ".credentials.json"));
     assert.equal(accounts[1]?.usage?.fiveHour?.percent, 5);
     assert.equal(accounts[0]?.plan, "claude_max");
@@ -27,7 +38,10 @@ describe("AccountService.list", () => {
   it("creates the profile for a live login that had none", async () => {
     await setLive(f.home, { email: "solo@x.io" });
     const { accounts } = await service(f).service.list();
-    assert.deepEqual(accounts.map((account) => [account.id, account.email, account.active]), [["solo", "solo@x.io", true]]);
+    assert.deepEqual(
+      accounts.map((account) => [account.id, account.email, account.active]),
+      [["solo", "solo@x.io", true]],
+    );
   });
 
   it("flags logins that need signing in again", async () => {
@@ -75,7 +89,11 @@ describe("AccountService.pickNext", () => {
     await addProfile(f.home, "b", { email: "b@x.io" });
     await addProfile(f.home, "full", { email: "f@x.io" });
     await setLive(f.home, { email: "m@x.io" });
-    const { service: s } = service(f, { "at-a@x.io": { five: 60, week: 10 }, "at-b@x.io": { five: 20, week: 30 }, "at-f@x.io": { five: 100, week: 1 } });
+    const { service: s } = service(f, {
+      "at-a@x.io": { five: 60, week: 10 },
+      "at-b@x.io": { five: 20, week: 30 },
+      "at-f@x.io": { five: 100, week: 1 },
+    });
     assert.equal((await s.pickNext()).id, "b");
     assert.equal((await s.pickNext({ below: { session: 50, week: 50 } })).id, "b");
     assert.equal((await s.pickNext({ below: { session: 10, week: 50 } })).id, null);
@@ -108,7 +126,6 @@ describe("AccountService login", () => {
     const finished = await s.finishLogin(started.session, "good-t@x.io");
     assert.deepEqual(finished, { ok: true, id: "trabajo", email: "t@x.io" });
     assert.equal((await stat(join(f.home, ".claude-trabajo"))).mode & 0o777, 0o700);
-    // Adding an account never changes which one is live.
     assert.equal((await s.list()).accounts.find((account) => account.active)?.id, "m");
   });
 

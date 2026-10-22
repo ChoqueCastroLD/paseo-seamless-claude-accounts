@@ -10,7 +10,7 @@ import {
   removeAccount,
   renameAccount,
   startLogin,
-  useAccount,
+  switchAccount,
   type Preferences,
 } from "./shared/contracts.ts";
 import { Failover } from "./server/failover.ts";
@@ -18,19 +18,23 @@ import { cacheFile, AccountService } from "./server/service.ts";
 import { pathsFor, Store } from "./server/store.ts";
 import { claudeVersion, UsageReader } from "./server/usage.ts";
 
-/** `claude` on the daemon's PATH, else where the native installer puts it. */
+function isExecutable(path: string): boolean {
+  try {
+    accessSync(path, constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function claudeBinary(): string {
   const dirs = [...(process.env.PATH ?? "").split(delimiter), join(homedir(), ".local", "bin")];
-  for (const dir of dirs) {
-    if (dir === "") continue;
-    try {
-      accessSync(join(dir, "claude"), constants.X_OK);
-      return join(dir, "claude");
-    } catch {
-      // Not here.
-    }
-  }
-  return "claude";
+  return (
+    dirs
+      .filter((dir) => dir !== "")
+      .map((dir) => join(dir, "claude"))
+      .find(isExecutable) ?? "claude"
+  );
 }
 
 export default function contribute(server: PluginServerContext) {
@@ -51,7 +55,7 @@ export default function contribute(server: PluginServerContext) {
   const failover = new Failover(service, readPreferences);
 
   server.handle(listAccounts, ({ refresh }) => service.list({ refresh }));
-  server.handle(useAccount, ({ id }) => service.use(id));
+  server.handle(switchAccount, ({ id }) => service.use(id));
   server.handle(renameAccount, ({ id, name }) => service.rename(id, name));
   server.handle(removeAccount, ({ id }) => service.remove(id));
   server.handle(startLogin, ({ name }) => service.startLogin(name));
@@ -63,7 +67,6 @@ export default function contribute(server: PluginServerContext) {
 
   server.on("agent.turn_ended", (event, { paseo }) => failover.onTurnEnded(event, paseo));
 
-  // Thresholds are checked on a timer that follows the configured interval.
   let timer: NodeJS.Timeout | null = null;
   const schedule = (prefs: Preferences) => {
     if (timer !== null) clearInterval(timer);
@@ -79,8 +82,7 @@ export default function contribute(server: PluginServerContext) {
     if (state.status === "ready") schedule(state.values);
   });
 
-  // Keep the profile of the live login in step with token renewals even when nobody opens the
-  // screen, so a long session never leaves its profile with a retired refresh token.
+  // Claude Code rotates refresh tokens in the live file only; keep the owning profile current.
   const sync = setInterval(() => {
     service.store.sync().catch((error: unknown) => console.error("sync failed:", error));
   }, 5 * 60_000);

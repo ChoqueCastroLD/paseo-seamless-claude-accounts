@@ -6,11 +6,19 @@ import { fullUntil, parseUsage, UsageReader } from "../server/usage.ts";
 import { peak } from "../shared/usage.ts";
 import { fixture, usageFetch, type Fixture } from "./helpers.ts";
 
-const login = (token: string, expiresAt: number | null = null) => ({ accessToken: token, refreshToken: "r", expiresAt, refreshExpiresAt: null });
+const login = (token: string, expiresAt: number | null = null) => ({
+  accessToken: token,
+  refreshToken: "r",
+  expiresAt,
+  refreshExpiresAt: null,
+});
 
 describe("parseUsage", () => {
   it("reads both windows and clamps percents", () => {
-    const usage = parseUsage({ five_hour: { utilization: 130, resets_at: "2030-01-01T05:00:00Z" }, seven_day: { utilization: "12.5" } }, 0);
+    const usage = parseUsage(
+      { five_hour: { utilization: 130, resets_at: "2030-01-01T05:00:00Z" }, seven_day: { utilization: "12.5" } },
+      0,
+    );
     assert.deepEqual(usage, {
       fiveHour: { percent: 100, resetsAt: "2030-01-01T05:00:00.000Z" },
       week: { percent: 12.5, resetsAt: null },
@@ -25,7 +33,10 @@ describe("parseUsage", () => {
 
   it("finds the binding window and when a full one frees up", () => {
     const usage = parseUsage(
-      { five_hour: { utilization: 100, resets_at: "2030-01-01T05:00:00Z" }, seven_day: { utilization: 40, resets_at: "2030-01-07T00:00:00Z" } },
+      {
+        five_hour: { utilization: 100, resets_at: "2030-01-01T05:00:00Z" },
+        seven_day: { utilization: 40, resets_at: "2030-01-07T00:00:00Z" },
+      },
       0,
     );
     assert.equal(peak(usage), 100);
@@ -40,7 +51,8 @@ describe("UsageReader", () => {
   beforeEach(async () => (f = await fixture()));
   afterEach(() => f.cleanup());
 
-  const reader = (fake: typeof fetch) => new UsageReader({ cacheFile: join(f.home, "cache", "usage.json"), version: Promise.resolve("9.9.9"), fetch: fake });
+  const reader = (fake: typeof fetch) =>
+    new UsageReader({ cacheFile: join(f.home, "cache", "usage.json"), version: Promise.resolve("9.9.9"), fetch: fake });
 
   it("sends the headers the endpoint requires", async () => {
     let headers: Record<string, string> = {};

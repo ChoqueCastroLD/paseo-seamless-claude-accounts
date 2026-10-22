@@ -5,9 +5,7 @@ import { writeAtomic, type Login } from "./store.ts";
 
 const ENDPOINT = "https://api.anthropic.com/api/oauth/usage";
 const TIMEOUT_MS = 8_000;
-/** A reading this recent is reused. Screens poll; the endpoint does not like being asked twice. */
 const FRESH_MS = 60_000;
-/** After a refusal (429 asks for about 25 minutes), stop asking for a while. */
 const BACKOFF_MS = 10 * 60_000;
 
 export interface UsageWindow {
@@ -37,19 +35,21 @@ function parseWindow(value: unknown): UsageWindow | null {
   if (typeof percent !== "number" || !Number.isFinite(percent)) return null;
   return {
     percent: Math.max(0, Math.min(100, percent)),
-    resetsAt: typeof resetsAt === "string" && !Number.isNaN(Date.parse(resetsAt)) ? new Date(resetsAt).toISOString() : null,
+    resetsAt:
+      typeof resetsAt === "string" && !Number.isNaN(Date.parse(resetsAt)) ? new Date(resetsAt).toISOString() : null,
   };
 }
 
-/** When the window that is full frees up, or null when none is full. */
 export function fullUntil(usage: Usage | null): string | null {
   if (usage === null) return null;
-  const full = [usage.fiveHour, usage.week].filter((window) => window !== null && window.percent >= 100 && window.resetsAt !== null);
-  const resets = full.map((window) => window!.resetsAt!).sort();
+  const resets = [usage.fiveHour, usage.week]
+    .flatMap((window) =>
+      window !== null && window.percent >= 100 && window.resetsAt !== null ? [window.resetsAt] : [],
+    )
+    .sort();
   return resets.at(-1) ?? null;
 }
 
-/** The `claude-code/x.y.z` the endpoint expects, from the installed CLI. */
 export function claudeVersion(binary: string): Promise<string> {
   return new Promise((resolve) => {
     execFile(binary, ["--version"], { timeout: 5_000 }, (error, stdout) => {
@@ -59,18 +59,11 @@ export function claudeVersion(binary: string): Promise<string> {
 }
 
 interface Entry {
-  /** Last good reading, kept across failures so an idle account still shows where it stood. */
   usage: Usage | null;
-  /** When the endpoint was last asked, good answer or not. */
   askedAt: number;
   failedAt: number | null;
 }
 
-/**
- * Reads how much of each window an account has used, from the endpoint Claude Code's `/usage`
- * calls. Readings are kept per account, in memory and in a small file, so a profile whose
- * token lapsed while idle still shows its last known allowance.
- */
 export class UsageReader {
   #entries = new Map<string, Entry>();
   #loaded: Promise<void> | null = null;
@@ -88,7 +81,8 @@ export class UsageReader {
     this.#loaded ??= readFile(this.#cacheFile, "utf8")
       .then((raw) => {
         for (const [key, usage] of Object.entries(JSON.parse(raw) as Record<string, Usage>)) {
-          if (!this.#entries.has(key)) this.#entries.set(key, { usage, askedAt: Number.NEGATIVE_INFINITY, failedAt: null });
+          if (!this.#entries.has(key))
+            this.#entries.set(key, { usage, askedAt: Number.NEGATIVE_INFINITY, failedAt: null });
         }
       })
       .catch(() => undefined);
@@ -102,17 +96,15 @@ export class UsageReader {
       await mkdir(dirname(this.#cacheFile), { recursive: true, mode: 0o700 });
       await writeAtomic(this.#cacheFile, `${JSON.stringify(out)}\n`);
     } catch {
-      // A cache that cannot be written only costs a request after the next restart.
+      // Losing the cache only costs one request after a restart.
     }
   }
 
-  /** The last reading known for an account, without asking. */
   async known(key: string): Promise<Usage | null> {
     await this.#load();
     return this.#entries.get(key)?.usage ?? null;
   }
 
-  /** Forgets cached readings for an account, e.g. after it was used up. */
   invalidate(key: string): void {
     const entry = this.#entries.get(key);
     if (entry !== undefined) entry.askedAt = Number.NEGATIVE_INFINITY;
@@ -126,7 +118,7 @@ export class UsageReader {
 
     if (entry.failedAt !== null && now - entry.failedAt < BACKOFF_MS) return entry.usage;
     if (!options.force && now - entry.askedAt < FRESH_MS) return entry.usage;
-    // An expired token would only earn a 401; Claude Code renews it once the account is in use.
+    // An expired token only earns a 401; Claude Code renews it once the account is live.
     if (login.expiresAt !== null && login.expiresAt <= now) return entry.usage;
 
     entry.askedAt = now;
