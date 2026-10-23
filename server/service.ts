@@ -327,10 +327,10 @@ export class AccountService {
     if (project === null) return null;
     const { placement } = await this.#current();
     if (placement.default === null) return null;
-    if (placement.projects[project] === undefined) {
-      await this.#apply("manual", { include: project, sticky: true });
-    }
-    return this.store.pointer(project);
+    if (placement.projects[project] !== undefined) return this.store.pointer(project);
+    const next = await this.#apply("manual", { include: project, sticky: true });
+    // No account may serve this project: the chat opens on the default login rather than none.
+    return next.projects[project] === undefined ? null : this.store.pointer(project);
   }
 
   async openSession<Request extends { provider: string; env: Record<string, string> }>(

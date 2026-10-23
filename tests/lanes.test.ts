@@ -183,6 +183,23 @@ describe("accounts per project", () => {
   });
 });
 
+describe("projects no account may serve", () => {
+  let f: Fixture;
+  beforeEach(async () => (f = await fixture()));
+  afterEach(() => f.cleanup());
+
+  it("open on the default login instead of a link to nowhere", async () => {
+    await addProfile(f.home, "home", { email: "h@x.io" });
+    await addProfile(f.home, "work", { email: "w@x.io" });
+    await setLive(f.home, { email: "h@x.io" });
+    const { service: s } = service(f);
+    await s.rules.update((rules) => void (rules.allowed = { home: ["prj_a"], work: ["prj_b"] }));
+    assert.equal(await s.laneFor("prj_new"), null);
+    assert.equal(await s.openSession({ provider: "claude", env: {} }, "prj_new"), undefined);
+    assert.equal(await s.laneFor("prj_a"), join(f.home, ".local/share/seamless-claude-accounts/lanes/prj_a"));
+  });
+});
+
 describe("session opening", () => {
   let f: Fixture;
   beforeEach(async () => (f = await fixture()));
