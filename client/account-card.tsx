@@ -102,7 +102,8 @@ function ActionsSheet({
 interface AccountCardProps {
   account: Account;
   count: number;
-  projectNames: ReadonlyMap<string, string>;
+  // Project name for a workspace or project id.
+  nameOf(id: string): string;
   busy: boolean;
   now: number;
   s: Styles;
@@ -110,7 +111,7 @@ interface AccountCardProps {
   actions: CardActions;
 }
 
-export function AccountCard({ account, count, projectNames, busy, now, s, text, actions }: AccountCardProps) {
+export function AccountCard({ account, count, nameOf, busy, now, s, text, actions }: AccountCardProps) {
   const [menu, setMenu] = useState(false);
   const title = account.email || account.name || text.t("unidentified");
   const subtitle = [account.id, account.plan.replace(/^claude_/, ""), account.organization]
@@ -122,7 +123,7 @@ export function AccountCard({ account, count, projectNames, busy, now, s, text, 
     Date.parse(account.loginExpiresAt) - now < LOGIN_WARNING_MS;
   const live = account.active || account.usedBy.length > 0;
   const names = (ids: string[]) => {
-    const shown = ids.map((id) => projectNames.get(id) ?? id).sort();
+    const shown = [...new Set(ids.map(nameOf))].sort();
     return shown.length <= 2 ? shown.join(", ") : `${shown.slice(0, 2).join(", ")} +${shown.length - 2}`;
   };
   const badge = account.active
@@ -130,8 +131,9 @@ export function AccountCard({ account, count, projectNames, busy, now, s, text, 
     : account.usedBy.length > 0
       ? text.t("inUseIn", { project: names(account.usedBy) })
       : null;
-  const scope =
-    account.allowed.length === 0 ? text.t("scopeAll") : text.t("scopeOnly", { projects: names(account.allowed) });
+  const scope = account.everywhere
+    ? text.t("scopeAll")
+    : text.t("scopeOnly", { projects: names(account.allowed) || "–" });
   const staleSince =
     account.usage !== null && now - Date.parse(account.usage.fetchedAt) > STALE_MS ? account.usage.fetchedAt : null;
 
@@ -213,11 +215,7 @@ export function AccountCard({ account, count, projectNames, busy, now, s, text, 
             {subtitle}
           </Text>
           <View style={[s.wrapRow, { gap: 4 }]}>
-            <Icon
-              name={account.allowed.length === 0 ? "Globe" : "FolderLock"}
-              size={12}
-              color={s.colors.foregroundMuted}
-            />
+            <Icon name={account.everywhere ? "Globe" : "FolderLock"} size={12} color={s.colors.foregroundMuted} />
             <Text style={s.small} numberOfLines={1}>
               {scope}
             </Text>

@@ -69,7 +69,8 @@ export class Failover {
       return;
 
     const project = await this.#projectOf(event.agent.workspaceId, paseo);
-    const decision = await this.#switchAfterLimit(project, !prefs.returnToPriority);
+    const scope = await this.#service.scopeOfAgent(event.agent.id, event.agent.workspaceId, project);
+    const decision = await this.#switchAfterLimit(scope, !prefs.returnToPriority);
     const now = Date.now();
     const recently = this.#resumedAt.get(event.agent.id);
     const resume =
@@ -95,26 +96,26 @@ export class Failover {
   }
 
   #switchAfterLimit(
-    project: string | null,
+    scope: string | null,
     sticky: boolean,
   ): Promise<{ from: string | null; to: string | null; nextReset: string | null }> {
     const run = this.#queue.then(async () => {
       const now = Date.now();
-      const scope = project ?? "";
-      const current = await this.#service.accountFor(project);
-      const last = this.#moved.get(scope);
+      const before = await this.#service.placement();
+      const key = scope ?? "";
+      const current = (scope === null ? before.default : (before.scopes[scope] ?? before.default)) ?? null;
+      const last = this.#moved.get(key);
       if (last !== undefined && now - last.at < SETTLE_MS && (last.to === current || last.from === current)) {
         return { from: last.from, to: last.to, nextReset: last.nextReset };
       }
-      const before = await this.#service.placement();
-      const result = await this.#service.failover(project, sticky, now);
+      const result = await this.#service.failover(scope, sticky, now);
       const after = await this.#service.placement();
       const note = (key: string, from: string | null, to: string | null) => {
         if (from !== to) this.#moved.set(key, { at: now, from, to, nextReset: null });
       };
       note("", before.default, after.default);
-      for (const [key, id] of Object.entries(after.projects)) note(key, before.projects[key] ?? before.default, id);
-      this.#moved.set(scope, { at: now, ...result });
+      for (const [key, id] of Object.entries(after.scopes)) note(key, before.scopes[key] ?? before.default, id);
+      this.#moved.set(key, { at: now, ...result });
       return result;
     });
     this.#queue = run.catch(() => undefined);

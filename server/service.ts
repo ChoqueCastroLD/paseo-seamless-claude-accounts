@@ -3,8 +3,18 @@ import type { Account, ErrorCode, HistoryEntry, SwitchReason } from "../shared/c
 import { slug } from "../shared/names.ts";
 import { peak } from "../shared/usage.ts";
 import { LoginError, LoginFlow } from "./login.ts";
-import { plan, prioritized, promote, type Candidate, type Placement } from "./policy.ts";
-import { forget, renameIn, RulesStore } from "./state.ts";
+import {
+  plan,
+  prioritized,
+  projectsOf,
+  promote,
+  allowEverywhere,
+  setProjects,
+  without,
+  type Candidate,
+  type Placement,
+} from "./policy.ts";
+import { forget, migrate, renameIn, RulesStore } from "./state.ts";
 import { Store, StoreError, type Profile } from "./store.ts";
 import { fullUntil, UsageReader, type Usage } from "./usage.ts";
 
@@ -53,6 +63,9 @@ export class AccountService {
   #fresh = new Set<string>();
   #logins = new Map<string, string>();
   #queue: Promise<unknown> = Promise.resolve();
+  #projects: string[] = [];
+  // Agent id to the link its session opened with; chats opened by 1.3 are not in it.
+  #agentScopes = new Map<string, string>();
 
   constructor(options: { store: Store; usage: UsageReader; binary: string; loginArgs?: string[] }) {
     this.store = options.store;
@@ -96,15 +109,15 @@ export class AccountService {
       }
       await this.store.point(legacy.id, this.#dirOf(saved?.id ?? null, defaultAccount));
     }
-    const projects: Record<string, string> = {};
-    for (const [project, dir] of await this.store.pointers()) {
+    const scopes: Record<string, string> = {};
+    for (const [scope, dir] of await this.store.pointers()) {
       const id = this.#accountOfDir(dir, defaultAccount);
-      if (id !== null) projects[project] = id;
+      if (id !== null) scopes[scope] = id;
     }
-    for (const id of new Set(Object.values(projects))) {
+    for (const id of new Set(Object.values(scopes))) {
       if (id !== defaultAccount) await this.store.sync(this.store.accountSeat(id), id);
     }
-    return { placement: { default: defaultAccount, projects }, profiles: await this.store.profiles() };
+    return { placement: { default: defaultAccount, scopes }, profiles: await this.store.profiles() };
   }
 
   async list(options: { refresh?: boolean; now?: number } = {}): Promise<{
@@ -127,8 +140,8 @@ export class AccountService {
       rules.order,
     );
     const usedBy = new Map<string, string[]>();
-    for (const [project, id] of Object.entries(placement.projects)) {
-      usedBy.set(id, [...(usedBy.get(id) ?? []), project]);
+    for (const [scope, id] of Object.entries(placement.scopes)) {
+      usedBy.set(id, [...(usedBy.get(id) ?? []), scope]);
     }
     const accounts = await Promise.all(
       profiles.map(async (profile): Promise<Account> => {
@@ -137,7 +150,8 @@ export class AccountService {
         const usage = login === null ? null : await this.usage.read(key, login, { now, force: options.refresh });
         const until = this.#exhausted.get(key) ?? null;
         const active = profile.id === placement.default;
-        const projects = usedBy.get(profile.id) ?? [];
+        const scopes = usedBy.get(profile.id) ?? [];
+        const allowed = projectsOf(rules, profile.id, this.#projects);
         return {
           id: profile.id,
           email: profile.identity?.email ?? "",
@@ -147,13 +161,14 @@ export class AccountService {
           status:
             login === null
               ? "no-login"
-              : !active && projects.length === 0 && login.refreshExpiresAt !== null && login.refreshExpiresAt <= now
+              : !active && scopes.length === 0 && login.refreshExpiresAt !== null && login.refreshExpiresAt <= now
                 ? "relogin"
                 : "ready",
           active,
-          usedBy: active ? [] : projects,
+          usedBy: active ? [] : scopes,
           priority: ranking.indexOf(profile.id) + 1,
-          allowed: rules.allowed[profile.id] ?? [],
+          allowed,
+          everywhere: allowed.length === this.#projects.length,
           usage,
           tokenExpiresAt: iso(login?.expiresAt ?? null),
           loginExpiresAt: iso(login?.refreshExpiresAt ?? null),
@@ -184,27 +199,36 @@ export class AccountService {
       const listing = await this.list();
       const { placement: current } = await this.#current();
       const rules = await this.rules.read();
-      const projects = [...new Set([...Object.keys(current.projects), ...(options.include ? [options.include] : [])])];
-      const next = plan(projects, this.#candidates(listing.accounts, options.below), rules, current, options.sticky);
+      const scopes = [...new Set([...Object.keys(current.scopes), ...(options.include ? [options.include] : [])])];
+      const next = plan(scopes, this.#candidates(listing.accounts, options.below), rules, current, options.sticky);
       const oldDefault = current.default;
       const newDefault = next.default ?? oldDefault;
-      const live = new Set(Object.values(current.projects).filter((id) => id !== oldDefault));
+      const live = new Set(Object.values(current.scopes).filter((id) => id !== oldDefault));
 
-      for (const [project, id] of Object.entries(next.projects)) {
+      for (const [scope, id] of Object.entries(next.scopes)) {
         if (id === newDefault) continue;
         if (!live.has(id)) {
           await this.store.install(id, this.store.accountSeat(id), null);
           live.add(id);
         }
-        await this.store.point(project, this.store.accountSeat(id).dir);
+        await this.store.point(scope, this.store.accountSeat(id).dir);
       }
       if (newDefault !== null && newDefault !== oldDefault) await this.store.install(newDefault);
       await this.store.linkDefaultSettings();
-      for (const [project, id] of Object.entries(next.projects)) {
-        if (id === newDefault) await this.store.point(project, this.store.paths.live);
+      for (const [scope, id] of Object.entries(next.scopes)) {
+        if (id === newDefault) await this.store.point(scope, this.store.paths.live);
       }
 
-      const after: Placement = { default: newDefault, projects: next.projects };
+      // A chat may have renewed its token in the dir its account just left; carry the newest login
+      // to the dir the account uses now.
+      const used = new Set(Object.values(next.scopes).filter((id) => id !== newDefault));
+      for (const id of live) {
+        if (used.has(id)) continue;
+        await this.store.sync(this.store.accountSeat(id), id);
+        if (id === newDefault) await this.store.adopt(this.store.defaultSeat, id);
+      }
+
+      const after: Placement = { default: newDefault, scopes: next.scopes };
       await this.#record(reason, current, after);
       return after;
     });
@@ -212,7 +236,7 @@ export class AccountService {
 
   async #record(reason: SwitchReason, before: Placement, after: Placement): Promise<void> {
     const moves = new Map<string, HistoryEntry>();
-    const note = (from: string | null, to: string | null, project: string | null) => {
+    const note = (from: string | null, to: string | null, scope: string | null) => {
       if (to === null || from === to) return;
       const key = `${from ?? ""}>${to}`;
       const entry = moves.get(key) ?? {
@@ -222,15 +246,15 @@ export class AccountService {
         reason,
         resumed: 0,
         everywhere: false,
-        projects: [],
+        scopes: [],
       };
-      if (project === null) entry.everywhere = true;
-      else entry.projects.push(project);
+      if (scope === null) entry.everywhere = true;
+      else entry.scopes.push(scope);
       moves.set(key, entry);
     };
     note(before.default, after.default, null);
-    for (const [project, id] of Object.entries(after.projects)) {
-      note(before.projects[project] ?? before.default, id, project);
+    for (const [scope, id] of Object.entries(after.scopes)) {
+      note(before.scopes[scope] ?? before.default, id, scope);
     }
     if (moves.size === 0) return;
     const profiles = await this.store.profiles();
@@ -267,23 +291,55 @@ export class AccountService {
     await this.#apply("manual");
   }
 
-  // A limited account moves to the front: it competes nowhere else, so its projects spend it first.
-  async assignProjects(id: string, projects: string[]): Promise<{ ok: true } | Failure> {
+  /** Records the projects and workspaces Paseo knows, and converts 1.2 and 1.3 rules once. */
+  async know(projects: string[], workspaces: Record<string, string>): Promise<void> {
+    if (projects.length > 0) this.#projects = [...projects].sort();
+    const rules = await this.rules.read();
+    const changed = Object.entries(workspaces).some(([id, project]) => rules.projectOf[id] !== project);
+    const convertible = Object.keys(rules.legacyAllowed).length > 0 && this.#projects.length > 0;
+    if (!changed && !convertible) return;
+    await this.rules.update((next) => {
+      next.projectOf = { ...next.projectOf, ...workspaces };
+      migrate(next, this.#projects);
+    });
+  }
+
+  get knowsProjects(): boolean {
+    return this.#projects.length > 0;
+  }
+
+  /**
+   * Which projects may use an account. `everywhere` clears every exclusion, including projects the
+   * caller has not seen; otherwise only the projects in `known` are decided.
+   */
+  async assignProjects(
+    id: string,
+    projects: string[],
+    options: { everywhere: boolean; known: string[] },
+  ): Promise<{ ok: true } | Failure> {
     try {
       const listing = await this.list();
       if (!listing.accounts.some((account) => account.id === id)) {
         throw new StoreError("unknown-account", `no profile named ${id}`);
       }
-      const ids = listing.accounts.map((account) => account.id);
-      const next = [...new Set(projects)].sort();
-      await this.rules.update((rules) => {
-        rules.allowed = Object.fromEntries(Object.entries(rules.allowed).filter(([entry]) => entry !== id));
-        if (next.length > 0) {
-          rules.allowed[id] = next;
-          rules.order = promote(rules.order, ids, id);
-        }
-      });
+      await this.rules.update((rules) =>
+        options.everywhere ? allowEverywhere(rules, id) : setProjects(rules, id, projects, options.known),
+      );
       await this.#apply("manual");
+      return { ok: true };
+    } catch (error) {
+      return failure(error);
+    }
+  }
+
+  /** The accounts one workspace may use, or `null` to follow its project. */
+  async assignWorkspace(workspace: string, accounts: string[] | null): Promise<{ ok: true } | Failure> {
+    try {
+      await this.rules.update((rules) => {
+        const rest = without(rules.workspaces, workspace);
+        rules.workspaces = accounts === null || accounts.length === 0 ? rest : { ...rest, [workspace]: [...accounts] };
+      });
+      await this.#apply("manual", { include: workspace });
       return { ok: true };
     } catch (error) {
       return failure(error);
@@ -297,9 +353,9 @@ export class AccountService {
       if (next !== id) {
         await this.rules.update((rules) => renameIn(rules, id, next));
         await this.store.renameAccountDir(id, next);
-        for (const [project, owner] of Object.entries(placement.projects)) {
+        for (const [scope, owner] of Object.entries(placement.scopes)) {
           if (owner === id && id !== placement.default) {
-            await this.store.point(project, this.store.accountSeat(next).dir);
+            await this.store.point(scope, this.store.accountSeat(next).dir);
           }
         }
       }
@@ -312,7 +368,7 @@ export class AccountService {
   async remove(id: string): Promise<{ ok: true; trash: string } | Failure> {
     try {
       const { placement } = await this.#current();
-      if (Object.values(placement.projects).includes(id)) {
+      if (Object.values(placement.scopes).includes(id)) {
         throw new StoreError("active-account", `${id} is in use`);
       }
       const trash = await this.store.remove(id);
@@ -323,33 +379,43 @@ export class AccountService {
     }
   }
 
-  async laneFor(project: string | null): Promise<string | null> {
-    if (project === null) return null;
+  async laneFor(workspace: string | null): Promise<string | null> {
+    if (workspace === null) return null;
     const { placement } = await this.#current();
     if (placement.default === null) return null;
-    if (placement.projects[project] !== undefined) return this.store.pointer(project);
-    const next = await this.#apply("manual", { include: project, sticky: true });
-    // No account may serve this project: the chat opens on the default login rather than none.
-    return next.projects[project] === undefined ? null : this.store.pointer(project);
+    if (placement.scopes[workspace] !== undefined) return this.store.pointer(workspace);
+    const next = await this.#apply("manual", { include: workspace, sticky: true });
+    return next.scopes[workspace] === undefined ? null : this.store.pointer(workspace);
   }
 
-  async openSession<Request extends { provider: string; env: Record<string, string> }>(
-    request: Request,
-    project: string | null,
-  ): Promise<Request | undefined> {
+  async openSession<
+    Request extends { agentId: string; provider: string; workspaceId: string | null; env: Record<string, string> },
+  >(request: Request, project: string | null): Promise<Request | undefined> {
     if (request.provider !== "claude" || request.env.CLAUDE_CONFIG_DIR !== undefined) return undefined;
-    const lane = await this.laneFor(project);
-    if (lane === null) return undefined;
+    if (request.workspaceId !== null && project !== null) await this.know([], { [request.workspaceId]: project });
+    const lane = await this.laneFor(request.workspaceId);
+    if (lane === null || request.workspaceId === null) return undefined;
+    this.#agentScopes.set(request.agentId, request.workspaceId);
     return { ...request, env: { ...request.env, CLAUDE_CONFIG_DIR: lane } };
+  }
+
+  // Chats this plugin did not open since it started were opened by 1.3 through their project's
+  // link when that exists.
+  async scopeOfAgent(agentId: string, workspace: string | null, project: string | null): Promise<string | null> {
+    const known = this.#agentScopes.get(agentId);
+    if (known !== undefined) return known;
+    const { placement } = await this.#current();
+    if (project !== null && placement.scopes[project] !== undefined) return project;
+    return workspace !== null && placement.scopes[workspace] !== undefined ? workspace : null;
   }
 
   async placement(): Promise<Placement> {
     return (await this.#current()).placement;
   }
 
-  async accountFor(project: string | null): Promise<string | null> {
+  async accountFor(scope: string | null): Promise<string | null> {
     const { placement } = await this.#current();
-    return (project === null ? null : placement.projects[project]) ?? placement.default;
+    return (scope === null ? undefined : placement.scopes[scope]) ?? placement.default;
   }
 
   async markExhausted(id: string, now = Date.now()): Promise<void> {
@@ -362,14 +428,14 @@ export class AccountService {
   }
 
   async failover(
-    project: string | null,
+    scope: string | null,
     sticky: boolean,
     now = Date.now(),
   ): Promise<{ from: string | null; to: string | null; nextReset: string | null }> {
-    const from = await this.accountFor(project);
+    const from = await this.accountFor(scope);
     if (from !== null) await this.markExhausted(from, now);
-    const placement = await this.#apply("limit", { sticky });
-    const to = (project === null ? null : placement.projects[project]) ?? placement.default;
+    await this.#apply("limit", { sticky });
+    const to = await this.accountFor(scope);
     if (to !== null && to !== from) return { from, to, nextReset: null };
     const { accounts } = await this.list({ now });
     const resets = accounts
@@ -394,7 +460,7 @@ export class AccountService {
     try {
       const { placement } = await this.#current();
       // Two logins of one account would invalidate each other's refresh token.
-      if (placement.default === id || Object.values(placement.projects).includes(id)) {
+      if (placement.default === id || Object.values(placement.scopes).includes(id)) {
         throw new StoreError("active-account", `${id} is the account in use`);
       }
       const existing = (await this.store.profiles()).find((profile) => profile.id === id);

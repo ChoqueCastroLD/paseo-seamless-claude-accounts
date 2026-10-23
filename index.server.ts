@@ -6,6 +6,7 @@ import {
   cancelLogin,
   finishLogin,
   assignProjects,
+  assignWorkspace,
   listAccounts,
   preferences,
   removeAccount,
@@ -67,10 +68,24 @@ export default function contribute(server: PluginServerContext) {
   const failover = new Failover(service, readPreferences, resolveProject);
 
   server.handle(listAccounts, async ({ refresh }, { paseo }) => {
-    const [listing, projects] = await Promise.all([service.list({ refresh }), paseo.projects.list()]);
+    const [projects, workspaces] = await Promise.all([paseo.projects.list(), paseo.workspaces.list()]);
+    for (const workspace of workspaces.entries) projectOf.set(workspace.id, workspace.projectId);
+    await service.know(
+      projects.projects.map((project) => project.projectId),
+      Object.fromEntries(workspaces.entries.map((workspace) => [workspace.id, workspace.projectId])),
+    );
+    const listing = await service.list({ refresh });
+    const rules = await service.rules.read();
     return {
       ...listing,
       projects: projects.projects.map((project) => ({ id: project.projectId, name: project.projectDisplayName })),
+      workspaces: workspaces.entries.map((workspace) => ({
+        id: workspace.id,
+        name: workspace.title ?? workspace.name,
+        projectId: workspace.projectId,
+      })),
+      choices: rules.workspaces,
+      excluded: rules.excluded,
     };
   });
   server.handle(switchAccount, ({ id }) => service.use(id));
@@ -78,7 +93,10 @@ export default function contribute(server: PluginServerContext) {
     await service.reorder(ids);
     return {};
   });
-  server.handle(assignProjects, ({ id, projects }) => service.assignProjects(id, projects));
+  server.handle(assignProjects, ({ id, projects, known, everywhere }) =>
+    service.assignProjects(id, projects, { everywhere, known }),
+  );
+  server.handle(assignWorkspace, ({ workspaceId, accounts }) => service.assignWorkspace(workspaceId, accounts));
   server.handle(renameAccount, ({ id, name }) => service.rename(id, name));
   server.handle(removeAccount, ({ id }) => service.remove(id));
   server.handle(startLogin, ({ name }) => service.startLogin(name));
@@ -94,6 +112,13 @@ export default function contribute(server: PluginServerContext) {
   // moves every open chat of the project to another account on its next request.
   server.before("agent.session_open", async ({ request }, { paseo }) => {
     if (request.provider !== "claude") return;
+    if (!service.knowsProjects) {
+      const { projects } = await paseo.projects.list();
+      await service.know(
+        projects.map((project) => project.projectId),
+        {},
+      );
+    }
     return service.openSession(request, await resolveProject(request.workspaceId, paseo));
   });
 

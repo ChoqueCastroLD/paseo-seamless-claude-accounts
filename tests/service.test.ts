@@ -71,7 +71,7 @@ describe("AccountService.use", () => {
     assert.equal(accounts[0]?.id, "work");
     assert.deepEqual(
       { ...history[0], at: "" },
-      { at: "", from: "h", to: "work", reason: "manual", resumed: 0, everywhere: true, projects: [] },
+      { at: "", from: "h", to: "work", reason: "manual", resumed: 0, everywhere: true, scopes: [] },
     );
   });
 

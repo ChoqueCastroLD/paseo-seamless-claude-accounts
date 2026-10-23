@@ -364,6 +364,7 @@ interface WhereDialogProps {
   id: string;
   name: string;
   current: string[];
+  everywhere: boolean;
   projects: { id: string; name: string }[];
   onClose(): void;
   onDone(): void;
@@ -371,10 +372,10 @@ interface WhereDialogProps {
   text: Strings;
 }
 
-export function WhereDialog({ id, name, current, projects, onClose, onDone, s, text }: WhereDialogProps) {
+export function WhereDialog({ id, name, current, everywhere, projects, onClose, onDone, s, text }: WhereDialogProps) {
   const assign = useRpc(assignProjects);
   const toast = useToast();
-  const [only, setOnly] = useState(current.length > 0);
+  const [only, setOnly] = useState(!everywhere);
   const [chosen, setChosen] = useState(() => new Set(current));
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -390,7 +391,8 @@ export function WhereDialog({ id, name, current, projects, onClose, onDone, s, t
 
   async function save() {
     setBusy(true);
-    const result = await assign({ id, projects: only ? [...chosen] : [] }).catch(transportFailure);
+    const known = projects.map((project) => project.id);
+    const result = await assign({ id, projects: [...chosen], known, everywhere: !only }).catch(transportFailure);
     setBusy(false);
     if (!result.ok) return setError(text.error(result.error, result.detail));
     toast.show(text.t("whereSaved"), { variant: "success" });

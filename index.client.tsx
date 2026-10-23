@@ -4,6 +4,7 @@ import { AccountsScreen, SCREEN_ID, SETTINGS_ID } from "./client/screen";
 import { SettingsScreen } from "./client/settings";
 import { AccountsItem } from "./client/sidebar";
 import { SwitchNotice } from "./client/timeline-row";
+import { contributeWorkspaceButtons } from "./client/workspace-accounts";
 import { deviceLanguage, strings, type Strings } from "./client/i18n";
 import { listAccounts, preferences, switchAccount, switchRow, type Account } from "./shared/contracts";
 
@@ -104,7 +105,10 @@ export default function contribute(client: PluginClientContext) {
   refresh();
   const timer = setInterval(refresh, COMMANDS_REFRESH_MS);
 
+  const stopButtons = contributeWorkspaceButtons(client, text.t("workspaceButton"));
+
   return () => {
+    stopButtons();
     clearInterval(timer);
     for (const remove of removers) remove();
   };

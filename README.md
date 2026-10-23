@@ -46,9 +46,9 @@ chat to carry on.
   restarted, copied or reloaded.
 - **Priority order.** Number your accounts. The first one with allowance left is spent first,
   and when a higher one frees up again the plugin goes back to it.
-- **Accounts per project.** Keep a work account for the work project only. Its chats use that
-  account first and the others after it runs out; no other project ever touches it. Open chats
-  follow every change immediately.
+- **Accounts per project and per workspace.** Keep a work account for the work project only, or
+  pick the accounts of a single workspace from its header. Everything is allowed by default, so
+  new and quickly created workspaces just work. Open chats follow every change immediately.
 - **Automatic failover.** When a chat stops with _"You've hit your session limit"_, the plugin
   moves to the account with the most allowance left and resumes every chat that stopped.
 - **Preemptive thresholds.** Optionally switch before the limit, when the 5-hour window reaches
@@ -111,6 +111,7 @@ composer.
 | Renew an expired sign-in      | **Sign in again** on the card                                                        |
 | Change the priority order     | **⋯** on a card → **Move up** / **Move down**                                        |
 | Limit an account to projects  | **⋯** on a card → **Where to use it…**                                               |
+| Choose a workspace's accounts | **Claude accounts** in the workspace header (the workspace menu on phones)           |
 | Rename or remove a profile    | **⋯** on a card                                                                      |
 | Configure automatic switching | **Settings → Plugins → Seamless Claude Accounts**, or the summary card on the screen |
 
@@ -127,19 +128,28 @@ shows up as the account `work`.
 
 ## Priority and projects
 
-Accounts are numbered. Every project uses the first account in the list that it may use and that
-still has allowance left; when that account runs out, its projects move to the next one, and when
+Accounts are numbered. Every workspace uses the first account in the list that it may use and that
+still has allowance left; when that account runs out its workspaces move to the next one, and when
 an earlier account frees up they move back. **Use first** on a card puts that account at the top.
 The order starts with the account already in use, so installing the plugin changes nothing.
 
-An account can be limited to **selected projects**. Only those projects use it, and it moves to the
-top of the list so they spend it first; every other project skips it. With a company account
-limited to the company project, company chats spend it first and fall back to your other accounts
-when it runs out, while every other project never touches it.
+**Every account is allowed everywhere by default.** You narrow that in two places:
 
-Every change applies to open chats at once, without restarting them. Each project's chats use a
-link as their config dir, and switching the project's account repoints the link; Claude Code reads
-through it again on its next request.
+| Where                                                  | What it sets                                                                                  |
+| ------------------------------------------------------ | --------------------------------------------------------------------------------------------- |
+| **⋯ → Where to use it…** on an account card            | The projects that may use the account. Projects created later still start with every account. |
+| The **Claude accounts** button in a workspace's header | The accounts this one workspace may use, or **Same as the project** (the default).            |
+
+A new workspace follows its project, so one created in a hurry, or by an agent through the SDK,
+needs no extra step and never breaks a flow: in a new project it may use every account, and in a
+project you restricted it follows that project's rule. Pick its accounts from the header button
+before sending the first message to start it on the right one. Rules that would leave a workspace
+no account at all are ignored. Accounts you limited to some projects are kept away from chats
+outside any project, and from your terminal, while an unrestricted account exists.
+
+Every change applies to open chats at once, without restarting them. Each workspace's chats use a
+link as their config dir, and switching the workspace's account repoints the link; Claude Code
+reads through it again on its next request.
 
 ## Automatic switching
 
@@ -189,12 +199,12 @@ every open chat, history intact
 5. **Failover** listens to Paseo's `agent.turn_ended` hook. The first chat to hit a limit
    switches; chats that hit it in the same moment follow that switch instead of starting another.
 
-6. **Projects** open their Claude chats with `CLAUDE_CONFIG_DIR` set to a link under
+6. **Workspaces** open their Claude chats with `CLAUDE_CONFIG_DIR` set to a link under
    `~/.local/share/seamless-claude-accounts/lanes/`, through a Paseo `agent.session_open` hook.
-   The link points at the config dir of the project's account: `~/.claude` for the account in
+   The link points at the config dir of the workspace's account: `~/.claude` for the account in
    use everywhere else, or `~/.local/share/seamless-claude-accounts/accounts/<name>`, which links
    to every entry of `~/.claude` (history, settings, plugins) except the login and the refresh
-   lock. Switching a project repoints its link in one rename.
+   lock. Switching a workspace repoints its link in one rename.
 7. **One account, one login file.** All chats on an account share one credential file and one
    refresh lock, as Claude Code expects, so a token renewal in one chat never invalidates
    another.
@@ -220,10 +230,12 @@ See [SECURITY.md](SECURITY.md) to report a vulnerability.
 
 ## Limitations
 
-- **Accounts follow projects, not single chats.** Every chat in a project uses that project's
-  account.
+- **Accounts follow workspaces, not single chats.** Every chat in a workspace uses that
+  workspace's account.
 - **Chats opened before version 1.3** follow the account in `~/.claude` until they restart once;
-  from then on they follow their project.
+  from then on they follow their workspace. Chats opened by 1.3 keep following their project.
+- **Paseo has no plugin hook in the new-workspace form**, so the account picker lives in the
+  workspace header, available the moment the workspace exists.
 - **A rare race with token renewal.** If Claude Code renews the old token in the same instant,
   its write can win. The plugin detects this and reports it; switching again fixes it.
 - **macOS Keychain logins are not supported.** The plugin reads and writes the credential file.

@@ -65,13 +65,13 @@ function AutoSwitchSummary({ s, text, onPress }: { s: Styles; text: Strings; onP
 
 interface HistoryProps {
   entries: HistoryEntry[];
-  projectNames: ReadonlyMap<string, string>;
+  nameOf(id: string): string;
   now: number;
   s: Styles;
   text: Strings;
 }
 
-function History({ entries, projectNames, now, s, text }: HistoryProps) {
+function History({ entries, nameOf, now, s, text }: HistoryProps) {
   if (entries.length === 0) return null;
   const reason = {
     manual: text.t("reasonManual"),
@@ -81,8 +81,8 @@ function History({ entries, projectNames, now, s, text }: HistoryProps) {
   };
   const describe = (entry: HistoryEntry) => {
     const line = text.t("historyEntry", { from: entry.from || "–", to: entry.to });
-    if (entry.everywhere || entry.projects.length === 0) return line;
-    const projects = entry.projects.map((id) => projectNames.get(id) ?? id).sort();
+    if (entry.everywhere || entry.scopes.length === 0) return line;
+    const projects = [...new Set(entry.scopes.map(nameOf))].sort();
     const shown =
       projects.length <= 2 ? projects.join(", ") : `${projects.slice(0, 2).join(", ")} +${projects.length - 2}`;
     return text.t("historyIn", { entry: line, project: shown });
@@ -179,6 +179,11 @@ export function AccountsScreen({
   const accounts = query.data?.accounts ?? [];
   const projects = query.data?.projects ?? [];
   const projectNames = new Map(projects.map((project) => [project.id, project.name]));
+  const workspaceProject = new Map((query.data?.workspaces ?? []).map((entry) => [entry.id, entry.projectId]));
+  const nameOf = (id: string) => {
+    const project = workspaceProject.get(id) ?? id;
+    return projectNames.get(project) ?? project;
+  };
   const shift = (account: Account, by: -1 | 1) => {
     const ids = accounts.map((entry) => entry.id);
     const from = ids.indexOf(account.id);
@@ -231,7 +236,7 @@ export function AccountsScreen({
           key={account.id}
           account={account}
           count={accounts.length}
-          projectNames={projectNames}
+          nameOf={nameOf}
           busy={switching.isPending}
           now={now}
           s={s}
@@ -247,7 +252,7 @@ export function AccountsScreen({
         />
       ))}
 
-      <History entries={query.data?.history ?? []} projectNames={projectNames} now={now} s={s} text={text} />
+      <History entries={query.data?.history ?? []} nameOf={nameOf} now={now} s={s} text={text} />
 
       {query.data === undefined ? null : (
         <Text style={s.small} selectable>
@@ -266,6 +271,7 @@ export function AccountsScreen({
           id={dialog.account.id}
           name={dialog.account.email || dialog.account.id}
           current={dialog.account.allowed}
+          everywhere={dialog.account.everywhere}
           projects={projects}
           onClose={close}
           onDone={done}

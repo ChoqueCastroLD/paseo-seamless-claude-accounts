@@ -98,15 +98,15 @@ describe("Store", () => {
   });
 
   it("saves a live login that has no profile before anything can replace it", async () => {
-    await setLive(f.home, { email: "luis.choque@x.io" });
+    await setLive(f.home, { email: "jane.doe@x.io" });
     const owner = await f.store.sync();
-    assert.equal(owner?.id, "luis-choque");
-    const saved = await readFile(join(f.home, ".claude-luis-choque", ".credentials.json"), "utf8");
+    assert.equal(owner?.id, "jane-doe");
+    const saved = await readFile(join(f.home, ".claude-jane-doe", ".credentials.json"), "utf8");
     assert.equal(saved, await readFile(join(f.home, ".claude", ".credentials.json"), "utf8"));
-    assert.equal((await stat(join(f.home, ".claude-luis-choque"))).mode & 0o777, 0o700);
+    assert.equal((await stat(join(f.home, ".claude-jane-doe"))).mode & 0o777, 0o700);
     assert.equal(
-      (await readJson(join(f.home, ".claude-luis-choque", ".claude.json"))).oauthAccount.emailAddress,
-      "luis.choque@x.io",
+      (await readJson(join(f.home, ".claude-jane-doe", ".claude.json"))).oauthAccount.emailAddress,
+      "jane.doe@x.io",
     );
   });
 

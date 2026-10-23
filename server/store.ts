@@ -296,6 +296,18 @@ export class Store {
     await symlink(this.paths.liveSettings, inside);
   }
 
+  /** Gives a seat its account's profile login when the profile holds a newer one. */
+  adopt(seat: Seat, id: string): Promise<void> {
+    return this.#exclusive(async () => {
+      const profile = (await this.profiles()).find((candidate) => candidate.id === id);
+      const raw = profile === undefined ? null : await readText(join(profile.dir, ".credentials.json"));
+      const stored = raw === null ? null : parseLogin(raw);
+      const live = parseLogin((await readText(join(seat.dir, ".credentials.json"))) ?? "");
+      if (raw === null || stored === null || live === null) return;
+      if ((stored.expiresAt ?? 0) > (live.expiresAt ?? 0)) await writeAtomic(join(seat.dir, ".credentials.json"), raw);
+    });
+  }
+
   renameAccountDir(from: string, to: string): Promise<void> {
     return this.#exclusive(async () => {
       const source = this.accountSeat(from).dir;

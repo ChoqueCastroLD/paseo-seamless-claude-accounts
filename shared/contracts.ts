@@ -23,11 +23,12 @@ export const accountSchema = z.object({
   status: accountStatus,
   // Serves the chats outside projects and every project that has no better account.
   active: z.boolean(),
-  // Projects served by this account when it is not the active one.
+  // Workspaces (or, for chats opened by 1.3, projects) served by this account when it is not active.
   usedBy: z.array(z.string()),
   priority: z.number().int(),
-  // Projects the account is limited to; empty means every project.
+  // Known projects that may use the account.
   allowed: z.array(z.string()),
+  everywhere: z.boolean(),
   usage: usageSchema.nullable(),
   tokenExpiresAt: z.string().nullable(),
   loginExpiresAt: z.string().nullable(),
@@ -41,7 +42,7 @@ export type SwitchReason = z.infer<typeof switchReason>;
 const historyEntrySchema = z.object({
   at: z.string(),
   everywhere: z.boolean(),
-  projects: z.array(z.string()),
+  scopes: z.array(z.string()),
   from: z.string(),
   to: z.string(),
   reason: switchReason,
@@ -76,6 +77,11 @@ export const listAccounts = defineRpc({
     target: z.string(),
     history: z.array(historyEntrySchema),
     projects: z.array(z.object({ id: z.string(), name: z.string() })),
+    workspaces: z.array(z.object({ id: z.string(), name: z.string(), projectId: z.string() })),
+    // Workspace id to the accounts it may use, for workspaces that do not follow their project.
+    choices: z.record(z.string(), z.array(z.string())),
+    // Project id to the accounts it may not use.
+    excluded: z.record(z.string(), z.array(z.string())),
   }),
 });
 
@@ -105,7 +111,21 @@ export const reorderAccounts = defineRpc({
 
 export const assignProjects = defineRpc({
   name: "seamless-claude.projects",
-  input: z.object({ id: z.string(), projects: z.array(z.string()) }),
+  // `everywhere` lets every project use the account, including projects created later. Otherwise
+  // `projects` may use it out of `known`, the projects the person deciding could see.
+  input: z.object({
+    id: z.string(),
+    projects: z.array(z.string()),
+    known: z.array(z.string()),
+    everywhere: z.boolean(),
+  }),
+  output: z.discriminatedUnion("ok", [z.object({ ok: z.literal(true) }), failure]),
+});
+
+export const assignWorkspace = defineRpc({
+  name: "seamless-claude.workspace",
+  // `null` makes the workspace follow its project again.
+  input: z.object({ workspaceId: z.string(), accounts: z.array(z.string()).nullable() }),
   output: z.discriminatedUnion("ok", [z.object({ ok: z.literal(true) }), failure]),
 });
 

@@ -4,6 +4,34 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [1.4.0] - 2026-10-23
+
+### Added
+
+- A **Claude accounts** button in every workspace header chooses the accounts that workspace may
+  use, or **Same as the project**. It is there as soon as a workspace exists, before its first
+  message, and on phones it is a row of the workspace menu.
+
+### Changed
+
+- Every account is allowed everywhere by default. Limits are stored as exclusions per project, so
+  projects created later and accounts added later start unrestricted, and a workspace created in a
+  hurry or by an agent follows its project with no extra step.
+- Each workspace has its own link, so two workspaces of one project can use different accounts.
+  Links made by 1.3 per project keep working.
+- Accounts limited to some projects are kept away from chats outside projects and from the terminal
+  while an unrestricted account exists.
+- 1.2 and 1.3 project limits are honored until Paseo's project list is known, then converted.
+
+### Fixed
+
+- A workspace whose own accounts need a new sign-in is no longer moved to an account it excludes.
+- A new workspace no longer inherits the current global account as if it were already on it.
+- Choosing "All projects" no longer excludes the account from projects the dialog had not seen.
+- A chat opened by 1.3 that hits its limit marks its own account as used up, not its workspace's.
+- A token renewed in the moment an account changes dir is carried to its new dir, including when it
+  becomes the global account.
+
 ## [1.3.1] - 2026-10-23
 
 ### Fixed
@@ -106,6 +134,7 @@ All notable changes to this project are documented here. The format follows
 
 - First release: switch accounts by rewriting the live credential file.
 
+[1.4.0]: https://github.com/ChoqueCastroLD/paseo-seamless-claude-accounts/compare/v1.3.1...v1.4.0
 [1.3.1]: https://github.com/ChoqueCastroLD/paseo-seamless-claude-accounts/compare/v1.3.0...v1.3.1
 [1.3.0]: https://github.com/ChoqueCastroLD/paseo-seamless-claude-accounts/compare/v1.2.1...v1.3.0
 [1.2.1]: https://github.com/ChoqueCastroLD/paseo-seamless-claude-accounts/compare/v1.2.0...v1.2.1

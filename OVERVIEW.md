@@ -16,13 +16,15 @@ Before each switch the live login is saved back into its own profile, including 
 Code renewed while it was in use, so switching back never needs a new sign-in. A live login with
 no profile gets one automatically.
 
-## Priority and projects
+## Priority, projects and workspaces
 
-Accounts are numbered. Each project uses the first account it may use that has allowance left,
-moves to the next when it runs out, and moves back when an earlier one frees up. An account can
-be limited to selected projects: they spend it first and no other project uses it. Every change
-reaches open chats at once, without restarting them: each project's chats read their config dir
-through a link that the plugin repoints.
+Accounts are numbered. Each workspace uses the first account it may use that has allowance left,
+moves to the next when it runs out, and moves back when an earlier one frees up. Every account is
+allowed everywhere by default. An account can be limited to selected projects from its card, and a
+single workspace can pick its own accounts from the **Claude accounts** button in its header. New
+workspaces follow their project, so quick creation and agents that create workspaces need nothing
+extra. Every change reaches open chats at once, without restarting them: each workspace's chats
+read their config dir through a link that the plugin repoints.
 
 ## Setup
 
@@ -38,7 +40,8 @@ the link it gives and paste the code back.
   rename, remove and sign in again.
 - A sidebar row with the active account and how full it is.
 - Command Center entries for every account and `/account <name>` in the composer.
-- Priority order and per-project accounts, set from each account's menu.
+- Priority order, per-project accounts from each account's menu, and per-workspace accounts from
+  the workspace header.
 - Automatic switching when a chat hits its limit, with an optional resume prompt sent to the
   chats that stopped. A note in each chat records what happened.
 - Optional switching before the limit, at a percentage of the 5-hour window or of the 7-day
