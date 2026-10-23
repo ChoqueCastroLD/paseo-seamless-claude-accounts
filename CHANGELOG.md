@@ -4,6 +4,24 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [1.6.1] - 2026-10-23
+
+### Fixed
+
+- The workspace accounts popover cut off its Cancel and Save buttons with five or more accounts.
+  The account list now scrolls inside it.
+- The accounts screen, the README and the listing overview described the old single-login switch.
+  They now describe the per-workspace links that switches repoint.
+
+### Changed
+
+- An account carrying chats is badged "In use" instead of "Active", since several can be in use at
+  once in different workspaces.
+
+### Added
+
+- Plugin icon and screenshots for the Paseo plugin registry, made with sample accounts.
+
 ## [1.6.0] - 2026-10-23
 
 ### Changed
@@ -183,6 +201,7 @@ All notable changes to this project are documented here. The format follows
 
 - First release: switch accounts by rewriting the live credential file.
 
+[1.6.1]: https://github.com/ChoqueCastroLD/paseo-seamless-claude-accounts/compare/v1.6.0...v1.6.1
 [1.6.0]: https://github.com/ChoqueCastroLD/paseo-seamless-claude-accounts/compare/v1.5.0...v1.6.0
 [1.5.0]: https://github.com/ChoqueCastroLD/paseo-seamless-claude-accounts/compare/v1.4.1...v1.5.0
 [1.4.1]: https://github.com/ChoqueCastroLD/paseo-seamless-claude-accounts/compare/v1.4.0...v1.4.1

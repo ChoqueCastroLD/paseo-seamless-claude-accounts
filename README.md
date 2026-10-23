@@ -9,6 +9,8 @@
 [![Paseo](https://img.shields.io/badge/paseo-%E2%89%A50.12-6f42c1)](https://paseo.sh)
 [![Platforms](https://img.shields.io/badge/platforms-Linux%20%7C%20macOS*-lightgrey)](#requirements)
 
+<img src="assets/accounts.png" alt="The Claude accounts screen: five numbered accounts with 5-hour and 7-day usage meters, two of them in use" width="900">
+
 </div>
 
 ---
@@ -36,10 +38,10 @@ When a Claude account runs out of its 5-hour or weekly allowance, every chat on 
 usual fixes cost you context: log out and back in, restart each chat under another
 `CLAUDE_CONFIG_DIR`, or hand the work over to a fresh session.
 
-This plugin does what `claude login` does, from inside Paseo: it replaces the one credential
-file Claude Code reads. Running sessions pick the new account up on their next request, with
-their history intact. When a chat hits its limit, the plugin can do that for you and tell the
-chat to carry on.
+This plugin gives every workspace a link to its account's config dir and repoints that link to
+switch. Claude Code follows the link on its next request, so running chats change account with
+their history intact and nothing restarts. When a chat hits its limit, the plugin can switch for
+you and tell the chat to carry on.
 
 ## Features
 
@@ -101,6 +103,13 @@ paseo plugin ls
 ```
 
 ## Usage
+
+<table>
+  <tr>
+    <td width="60%"><img src="assets/workspace.png" alt="The Claude accounts button in a workspace header, choosing the accounts of that workspace"></td>
+    <td width="40%"><img src="assets/phone-accounts.png" alt="The accounts screen on a phone"></td>
+  </tr>
+</table>
 
 Open **Claude accounts** from the sidebar, from `⌘K` / `Ctrl+K`, or type `/account` in the
 composer.
@@ -198,39 +207,39 @@ short message that ends the turn, so a reply that merely talks about limits neve
 ## How it works
 
 ```text
-~/.claude-work/.credentials.json     one profile per account
-              │
-              │  atomic copy on switch
-              ▼
-~/.claude/.credentials.json          the file every Claude Code session reads
-              │
-              │  read again on the next request
-              ▼
-every open chat, history intact
+workspace chats ──► lanes/<workspace>  link, repointed in one rename on a switch
+                          │
+                          ├──► ~/.claude                 the account in use outside workspaces
+                          └──► accounts/<name>           every other account
+                                  ├── .credentials.json  its own login
+                                  ├── .claude.json       its own copy of your settings file
+                                  └── everything else    links into ~/.claude
 ```
 
 1. **Profiles** are directories named `~/.claude-<name>`, each with its own
    `.credentials.json` and `.claude.json`, exactly what `CLAUDE_CONFIG_DIR=… claude login`
-   leaves behind.
-2. **Before a switch**, the live login is saved back into the profile that owns it, matched by
-   account and organization. A token is only copied forward in time, never over a newer one.
-3. **The switch** writes the chosen profile's credentials over `~/.claude/.credentials.json`
-   with a temporary file and a rename, so no reader sees half a file, then moves its
-   `oauthAccount` block into `~/.claude.json` so Claude Code shows the right address.
-4. **Usage** comes from the same endpoint Claude Code's `/usage` reads, with each account's own
-   token. Readings are cached for a minute and a refusal backs off for ten.
-5. **Failover** listens to Paseo's `agent.turn_ended` hook. The first chat to hit a limit
-   switches; chats that hit it in the same moment follow that switch instead of starting another.
-
-6. **Workspaces** open their Claude chats with `CLAUDE_CONFIG_DIR` set to a link under
+   leaves behind. They hold each account's login while it is not in use.
+2. **Config dirs.** Every account in use gets one. The account in use outside workspaces lives in
+   `~/.claude` itself; any other lives in `~/.local/share/seamless-claude-accounts/accounts/<name>`,
+   which links to every entry of `~/.claude` (history, settings, skills, plugins) except the
+   login and the refresh lock.
+3. **Workspaces** open their Claude chats with `CLAUDE_CONFIG_DIR` set to a link under
    `~/.local/share/seamless-claude-accounts/lanes/`, through a Paseo `agent.session_open` hook.
-   The link points at the config dir of the workspace's account: `~/.claude` for the account in
-   use everywhere else, or `~/.local/share/seamless-claude-accounts/accounts/<name>`, which links
-   to every entry of `~/.claude` (history, settings, plugins) except the login and the refresh
-   lock. Switching a workspace repoints its link in one rename.
-7. **One account, one login file.** All chats on an account share one credential file and one
+   A switch repoints the link with a temporary link and a rename. Claude Code resolves it on
+   every request, so open chats move on their next message.
+4. **The login in `~/.claude`** changes when the account in use outside workspaces does. The
+   chosen profile's credentials are written over `~/.claude/.credentials.json` with a temporary
+   file and a rename, so no reader sees half a file, and its `oauthAccount` block goes into
+   `~/.claude.json` so Claude Code shows the right address.
+5. **Before any login is replaced**, it is saved back into the profile that owns it, matched by
+   account and organization. A token is only copied forward in time, never over a newer one.
+6. **One account, one login file.** All chats on an account share one credential file and one
    refresh lock, as Claude Code expects, so a token renewal in one chat never invalidates
    another.
+7. **Usage** comes from the same endpoint Claude Code's `/usage` reads, with each account's own
+   token. Readings are cached for a minute and a refusal backs off for ten.
+8. **Failover** listens to Paseo's `agent.turn_ended` hook. The first chat to hit a limit
+   switches; chats that hit it in the same moment follow that switch instead of starting another.
 
 `CLAUDE_CONFIG_DIR` set on the daemon is respected: that directory is then the live one. A chat
 started with its own `CLAUDE_CONFIG_DIR` is left alone.
@@ -304,8 +313,8 @@ Contributions are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) first.
 This project started as a fork of
 [kostilal/paseo-claude-accounts](https://github.com/kostilal/paseo-claude-accounts), which
 switches accounts by giving each one its own config directory. That design restarts chats on
-every switch; this plugin was rewritten around the single credential file instead and shares no
-source code with it. The idea, and the details of the usage endpoint, are owed to that project.
+every switch; this plugin was rewritten around config dirs reached through links that can be
+repointed under running chats, and shares no source code with it. The idea, and the details of the usage endpoint, are owed to that project.
 
 ## License
 

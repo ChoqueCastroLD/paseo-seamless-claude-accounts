@@ -2,6 +2,15 @@
   "id": "seamless-claude-accounts",
   "name": "Seamless Claude Accounts",
   "description": "Switch the Claude account behind every open chat in one click, and fail over to another account automatically when one hits its limit. No restarts, no lost conversations.",
+  "icon": "assets/icon.png",
+  "media": [
+    "assets/accounts.png",
+    "assets/workspace.png",
+    "assets/projects.png",
+    "assets/actions.png",
+    "assets/phone-accounts.png",
+    "assets/phone-sidebar.png"
+  ],
   "requirements": {
     "paseo": ">=0.12.0"
   }

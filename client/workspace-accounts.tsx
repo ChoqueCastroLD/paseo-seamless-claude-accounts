@@ -3,7 +3,7 @@ import { useRpc } from "@getpaseo/plugin/client";
 import { Icon, useToast } from "@getpaseo/plugin/client/react-native";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { Pressable, Text, View } from "react-native";
+import { Pressable, ScrollView, Text, View } from "react-native";
 import { assignWorkspace, listAccounts } from "../shared/contracts";
 import { useStrings } from "./i18n";
 import { ACCOUNTS_QUERY, POLL_MS } from "./screen";
@@ -109,7 +109,7 @@ export function WorkspaceAccounts({ theme, layout, workspaceId, close }: PluginB
       (!draft.follow && [...draft.chosen].sort().join() !== [...(saved ?? fromProject)].sort().join()));
 
   return (
-    <View style={{ gap: 12, padding: layout.compact ? 4 : 0, minWidth: layout.compact ? undefined : 320 }}>
+    <View style={{ gap: 10, padding: layout.compact ? 4 : 0, minWidth: layout.compact ? undefined : 320 }}>
       <Text style={[s.body, { fontWeight: "600" }]}>{text.t("workspaceTitle")}</Text>
       {inUse === undefined ? null : (
         <Text style={s.muted}>{text.t("workspaceInUse", { email: inUse.email || inUse.id })}</Text>
@@ -135,7 +135,11 @@ export function WorkspaceAccounts({ theme, layout, workspaceId, close }: PluginB
           text={s.body}
         />
       </View>
-      <View style={[s.card, { gap: 0, paddingVertical: 4, opacity: state.follow ? 0.6 : 1 }]}>
+      <ScrollView
+        style={[s.card, { gap: 0, paddingVertical: 0, maxHeight: 4 * 44 + 10, opacity: state.follow ? 0.6 : 1 }]}
+        contentContainerStyle={{ paddingVertical: 4 }}
+        nestedScrollEnabled
+      >
         {data.accounts.map((account) => (
           <Check
             key={account.id}
@@ -148,7 +152,7 @@ export function WorkspaceAccounts({ theme, layout, workspaceId, close }: PluginB
             text={s.body}
           />
         ))}
-      </View>
+      </ScrollView>
       <View style={s.dialogActions}>
         <Pressable accessibilityRole="button" onPress={close} style={s.secondary}>
           <Text style={s.secondaryText}>{text.t("cancel")}</Text>

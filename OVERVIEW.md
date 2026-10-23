@@ -7,12 +7,15 @@ chat for you.
 ## How it works
 
 Each account is a `~/.claude-<name>` profile directory, the kind `CLAUDE_CONFIG_DIR=... claude
-login` creates. Switching copies that profile's login over `~/.claude/.credentials.json`, the
-file every Claude Code session reads, the same way `claude login` does. Open chats keep their
-history and use the new account from their next message. The switch applies to every Claude chat
-on the daemon at once.
+login` creates. Claude chats in a workspace open through a link to their account's config dir,
+which shares history, settings, skills and plugins with `~/.claude` and keeps only its own login.
+Switching repoints that link, so open chats keep their history and use the new account from
+their next message. Configuration and history are never touched. The only cost is Anthropic's
+prompt cache, which belongs to one account, so the first message after a switch is processed
+uncached once. That is why the plugin moves a busy chat only when it must and returns to a
+higher-priority account after the workspace has been quiet for an hour.
 
-Before each switch the live login is saved back into its own profile, including any token Claude
+Before any login is replaced, it is saved back into its own profile, including any token Claude
 Code renewed while it was in use, so switching back never needs a new sign-in. A live login with
 no profile gets one automatically.
 
@@ -56,3 +59,6 @@ profiles and its own directory `~/.local/share/seamless-claude-accounts`, all wi
 permissions. Usage, and whose a login is when its token changes, are read from
 `api.anthropic.com` with each account's own token. Removed profiles are moved to
 `~/.local/share/seamless-claude-accounts/trash`, never deleted.
+
+Claude chats opened before the plugin was installed have no workspace link. Each one is reopened
+once, the first time it is idle, so Paseo resumes the same conversation through its link.
