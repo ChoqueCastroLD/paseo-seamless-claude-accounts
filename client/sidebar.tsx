@@ -4,7 +4,6 @@ import { SidebarRow } from "@getpaseo/plugin/client/ui";
 import { useQuery } from "@tanstack/react-query";
 import { Text } from "react-native";
 import { listAccounts } from "../shared/contracts";
-import { peak } from "../shared/usage";
 import { useStrings } from "./i18n";
 import { ACCOUNTS_QUERY, POLL_MS, SCREEN_ID } from "./screen";
 import { meterColor } from "./styles";
@@ -25,7 +24,8 @@ export function AccountsItem({ currentScreen, openScreen, theme }: PluginSidebar
     refetchInterval: POLL_MS,
   });
   const active = query.data?.accounts.find((account) => account.active);
-  const used = peak(active?.usage ?? null);
+  const session = active?.usage?.fiveHour ?? null;
+  const used = session === null ? null : session.percent;
   return (
     <SidebarRow
       icon="Users"
@@ -34,7 +34,10 @@ export function AccountsItem({ currentScreen, openScreen, theme }: PluginSidebar
       onPress={() => openScreen({ screenId: SCREEN_ID })}
       trailing={
         used === null ? undefined : (
-          <Text style={{ color: meterColor(theme.colors, used), fontSize: 11, fontWeight: "600" }}>
+          <Text
+            accessibilityLabel={`${text.t("session")} ${Math.round(used)}%`}
+            style={{ color: meterColor(theme.colors, used), fontSize: 11, fontWeight: "600" }}
+          >
             {Math.round(used)}%
           </Text>
         )

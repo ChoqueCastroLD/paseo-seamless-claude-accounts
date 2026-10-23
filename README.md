@@ -60,7 +60,7 @@ chat to carry on.
   plugin saves them back into that account's profile, so switching back never needs a new login.
 - **No account is ever lost.** A live login without a profile is saved into one before anything
   replaces it.
-- **Everywhere in Paseo.** A sidebar row with the active account and its usage, a full screen,
+- **Everywhere in Paseo.** A sidebar row with the active account and its 5-hour session usage, a full screen,
   a settings page, `⌘K` entries for every account, and `/account <name>` (or `/cuenta`) in the
   composer. Each automatic switch leaves a note in the chats it touched.
 - **English and Spanish**, following the device language or a setting.

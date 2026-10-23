@@ -4,6 +4,13 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [1.2.1] - 2026-10-23
+
+### Changed
+
+- The sidebar shows the active account's 5-hour session usage instead of the fuller of its two
+  windows, which read as session usage while showing the weekly figure.
+
 ## [1.2.0] - 2026-10-23
 
 ### Added
@@ -72,6 +79,7 @@ All notable changes to this project are documented here. The format follows
 
 - First release: switch accounts by rewriting the live credential file.
 
+[1.2.1]: https://github.com/ChoqueCastroLD/paseo-seamless-claude-accounts/compare/v1.2.0...v1.2.1
 [1.2.0]: https://github.com/ChoqueCastroLD/paseo-seamless-claude-accounts/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/ChoqueCastroLD/paseo-seamless-claude-accounts/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/ChoqueCastroLD/paseo-seamless-claude-accounts/compare/f57c1e4...v1.0.0
