@@ -4,6 +4,8 @@ import { setProjects, without, type Rules } from "./policy.ts";
 import { writeAtomic } from "./store.ts";
 
 export interface Stored extends Rules {
+  // Agent id to the workspace link its session opened through. Chats missing here opened without one.
+  opened: Record<string, string>;
   // 1.2 and 1.3 kept, per account, the projects it was limited to. Converted once projects are known.
   legacyAllowed: Record<string, string[]>;
 }
@@ -36,10 +38,11 @@ export function parseRules(raw: string): Stored {
       excluded: lists(value.excluded),
       workspaces: lists(value.workspaces, true),
       projectOf: names(value.projectOf),
+      opened: names(value.opened),
       legacyAllowed: lists(value.legacyAllowed ?? value.allowed ?? value.projects),
     };
   } catch {
-    return { order: [], excluded: {}, workspaces: {}, projectOf: {}, legacyAllowed: {} };
+    return { order: [], excluded: {}, workspaces: {}, projectOf: {}, opened: {}, legacyAllowed: {} };
   }
 }
 

@@ -1,6 +1,7 @@
+import { execFile } from "node:child_process";
 import { accessSync, constants } from "node:fs";
 import { homedir } from "node:os";
-import { delimiter, join } from "node:path";
+import { delimiter, dirname, join } from "node:path";
 import type { PluginHandlerContext, PluginServerContext } from "@getpaseo/plugin/server";
 import {
   cancelLogin,
@@ -40,6 +41,18 @@ function claudeBinary(): string {
   );
 }
 
+/** The paseo CLI beside the daemon's node, else on PATH. */
+function paseoBinary(): string {
+  const beside = join(dirname(process.execPath), "paseo");
+  return isExecutable(beside) ? beside : "paseo";
+}
+
+function reloadAgent(binary: string, agentId: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    execFile(binary, ["agent", "reload", agentId], { timeout: 5 * 60_000 }, (error) => resolve(error === null));
+  });
+}
+
 export default function contribute(server: PluginServerContext) {
   const home = homedir();
   const binary = process.env.SEAMLESS_CLAUDE_BINARY ?? claudeBinary();
@@ -67,6 +80,24 @@ export default function contribute(server: PluginServerContext) {
   };
   const failover = new Failover(service, readPreferences, resolveProject);
 
+  // Chats whose session opened without a workspace link cannot follow a switch. Reopening an idle
+  // one resumes the same conversation through the session hook, which gives it its link.
+  const paseoCli = paseoBinary();
+  const adopting = new Set<string>();
+  const adopt = async (paseo: Paseo) => {
+    const { entries } = await paseo.agents.list();
+    await service.forgetAgentsExcept(new Set(entries.map(({ agent }) => agent.id)));
+    for (const id of await service.adoptable(entries.map(({ agent }) => agent))) {
+      if (adopting.has(id)) continue;
+      adopting.add(id);
+      const ok = await reloadAgent(paseoCli, id);
+      if (!ok) console.error(`could not reopen agent ${id} through its workspace link`);
+      adopting.delete(id);
+    }
+  };
+  const adoptInBackground = (paseo: Paseo) =>
+    void adopt(paseo).catch((error: unknown) => console.error("adopting chats failed:", error));
+
   server.handle(listAccounts, async ({ refresh }, { paseo }) => {
     const [projects, workspaces] = await Promise.all([paseo.projects.list(), paseo.workspaces.list()]);
     for (const workspace of workspaces.entries) projectOf.set(workspace.id, workspace.projectId);
@@ -74,6 +105,7 @@ export default function contribute(server: PluginServerContext) {
       projects.projects.map((project) => project.projectId),
       Object.fromEntries(workspaces.entries.map((workspace) => [workspace.id, workspace.projectId])),
     );
+    adoptInBackground(paseo);
     const listing = await service.list({ refresh });
     const rules = await service.rules.read();
     return {
@@ -106,7 +138,10 @@ export default function contribute(server: PluginServerContext) {
     return {};
   });
 
-  server.on("agent.turn_ended", (event, { paseo }) => failover.onTurnEnded(event, paseo));
+  server.on("agent.turn_ended", async (event, { paseo }) => {
+    await failover.onTurnEnded(event, paseo);
+    adoptInBackground(paseo);
+  });
 
   // Each project's chats open through a link to their account's config dir. Repointing the link
   // moves every open chat of the project to another account on its next request.

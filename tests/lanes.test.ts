@@ -287,3 +287,36 @@ describe("token renewals during a switch", () => {
     assert.equal(live?.accessToken, "renewed-in-old-dir");
   });
 });
+
+describe("chats opened without a workspace link", () => {
+  let f: Fixture;
+  beforeEach(async () => (f = await fixture()));
+  afterEach(() => f.cleanup());
+
+  it("are picked for a one-time reopen only when idle Claude chats in a workspace", async () => {
+    await addProfile(f.home, "home", { email: "h@x.io" });
+    await setLive(f.home, { email: "h@x.io" });
+    const { service: s } = service(f);
+    await s.openSession({ agentId: "linked", provider: "claude", workspaceId: "ws_a", env: {} }, "prj_a");
+    const agent = (id: string, extra: Record<string, unknown> = {}) => ({
+      id,
+      provider: "claude",
+      workspaceId: "ws_a",
+      status: "idle",
+      pendingPermissions: [],
+      ...extra,
+    });
+    const picked = await s.adoptable([
+      agent("old"),
+      agent("linked"),
+      agent("busy", { status: "running" }),
+      agent("asking", { pendingPermissions: [{}] }),
+      agent("codex", { provider: "codex" }),
+      agent("loose", { workspaceId: null }),
+      agent("archived", { archivedAt: "2026-01-01" }),
+    ]);
+    assert.deepEqual(picked, ["old"]);
+    await s.forgetAgentsExcept(new Set(["old"]));
+    assert.deepEqual((await s.rules.read()).opened, {});
+  });
+});

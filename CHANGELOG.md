@@ -4,6 +4,16 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [1.4.1] - 2026-10-23
+
+### Fixed
+
+- Chats whose session opened without a workspace link (before 1.4, or before the plugin was
+  installed) kept the account of `~/.claude` and never followed their workspace. The plugin now
+  reopens each one once, the first time it is idle, with `paseo agent reload`; Paseo resumes the
+  same conversation through the workspace link. Chats it opened itself are remembered and never
+  reopened.
+
 ## [1.4.0] - 2026-10-23
 
 ### Added
@@ -134,6 +144,7 @@ All notable changes to this project are documented here. The format follows
 
 - First release: switch accounts by rewriting the live credential file.
 
+[1.4.1]: https://github.com/ChoqueCastroLD/paseo-seamless-claude-accounts/compare/v1.4.0...v1.4.1
 [1.4.0]: https://github.com/ChoqueCastroLD/paseo-seamless-claude-accounts/compare/v1.3.1...v1.4.0
 [1.3.1]: https://github.com/ChoqueCastroLD/paseo-seamless-claude-accounts/compare/v1.3.0...v1.3.1
 [1.3.0]: https://github.com/ChoqueCastroLD/paseo-seamless-claude-accounts/compare/v1.2.1...v1.3.0

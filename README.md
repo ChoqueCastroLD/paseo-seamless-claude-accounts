@@ -147,9 +147,10 @@ before sending the first message to start it on the right one. Rules that would 
 no account at all are ignored. Accounts you limited to some projects are kept away from chats
 outside any project, and from your terminal, while an unrestricted account exists.
 
-Every change applies to open chats at once, without restarting them. Each workspace's chats use a
-link as their config dir, and switching the workspace's account repoints the link; Claude Code
-reads through it again on its next request.
+Every change applies to open chats without restarting them. Each workspace's chats use a link as
+their config dir, and switching the workspace's account repoints the link. Claude Code keeps its
+token in memory and checks the login file again at the start of each turn, so a chat uses the new
+account from its next message.
 
 ## Automatic switching
 
@@ -232,8 +233,10 @@ See [SECURITY.md](SECURITY.md) to report a vulnerability.
 
 - **Accounts follow workspaces, not single chats.** Every chat in a workspace uses that
   workspace's account.
-- **Chats opened before version 1.3** follow the account in `~/.claude` until they restart once;
-  from then on they follow their workspace. Chats opened by 1.3 keep following their project.
+- **Chats opened before their workspace had a link** (before 1.4, or before the plugin was
+  installed) are reopened once, automatically, the first time they are idle: Paseo resumes the same
+  conversation and the session opens through its workspace link. Chats with a turn running or a
+  permission pending are left until they are idle.
 - **Paseo has no plugin hook in the new-workspace form**, so the account picker lives in the
   workspace header, available the moment the workspace exists.
 - **A rare race with token renewal.** If Claude Code renews the old token in the same instant,

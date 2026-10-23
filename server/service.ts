@@ -53,6 +53,15 @@ export function cacheFile(home: string): string {
   return join(home, ".cache", "seamless-claude-accounts", "usage.json");
 }
 
+export interface AgentSummary {
+  id: string;
+  provider: string;
+  workspaceId?: string | null;
+  status: string;
+  archivedAt?: string | null;
+  pendingPermissions?: readonly unknown[] | null;
+}
+
 export class AccountService {
   readonly store: Store;
   readonly usage: UsageReader;
@@ -64,8 +73,6 @@ export class AccountService {
   #logins = new Map<string, string>();
   #queue: Promise<unknown> = Promise.resolve();
   #projects: string[] = [];
-  // Agent id to the link its session opened with; chats opened by 1.3 are not in it.
-  #agentScopes = new Map<string, string>();
 
   constructor(options: { store: Store; usage: UsageReader; binary: string; loginArgs?: string[] }) {
     this.store = options.store;
@@ -395,14 +402,15 @@ export class AccountService {
     if (request.workspaceId !== null && project !== null) await this.know([], { [request.workspaceId]: project });
     const lane = await this.laneFor(request.workspaceId);
     if (lane === null || request.workspaceId === null) return undefined;
-    this.#agentScopes.set(request.agentId, request.workspaceId);
+    const scope = request.workspaceId;
+    await this.rules.update((rules) => void (rules.opened = { ...rules.opened, [request.agentId]: scope }));
     return { ...request, env: { ...request.env, CLAUDE_CONFIG_DIR: lane } };
   }
 
   // Chats this plugin did not open since it started were opened by 1.3 through their project's
   // link when that exists.
   async scopeOfAgent(agentId: string, workspace: string | null, project: string | null): Promise<string | null> {
-    const known = this.#agentScopes.get(agentId);
+    const known = (await this.rules.read()).opened[agentId];
     if (known !== undefined) return known;
     const { placement } = await this.#current();
     if (project !== null && placement.scopes[project] !== undefined) return project;
@@ -411,6 +419,27 @@ export class AccountService {
 
   async placement(): Promise<Placement> {
     return (await this.#current()).placement;
+  }
+
+  /**
+   * Idle Claude chats whose session did not open through a workspace link: opened before 1.3, or
+   * through a 1.3 project link. Reopening them once lets every later switch reach them.
+   */
+  async adoptable(agents: AgentSummary[]): Promise<string[]> {
+    const { opened } = await this.rules.read();
+    return agents
+      .filter((agent) => agent.provider === "claude" && agent.workspaceId != null && agent.archivedAt == null)
+      .filter((agent) => agent.status === "idle" && (agent.pendingPermissions?.length ?? 0) === 0)
+      .filter((agent) => opened[agent.id] === undefined)
+      .map((agent) => agent.id);
+  }
+
+  async forgetAgentsExcept(existing: Set<string>): Promise<void> {
+    const { opened } = await this.rules.read();
+    if (Object.keys(opened).every((id) => existing.has(id))) return;
+    await this.rules.update((rules) => {
+      rules.opened = Object.fromEntries(Object.entries(rules.opened).filter(([id]) => existing.has(id)));
+    });
   }
 
   async accountFor(scope: string | null): Promise<string | null> {
