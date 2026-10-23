@@ -53,7 +53,8 @@ the link it gives and paste the code back.
 
 ## Data and permissions
 
-Tokens stay on the daemon machine; the app only receives addresses, plan names and percentages.
+Tokens are stored on the daemon machine and sent only to Anthropic, to authenticate usage and
+profile requests; the app only receives addresses, plan names and percentages.
 The plugin reads and writes `~/.claude/.credentials.json`, `~/.claude.json`, the `~/.claude-*`
 profiles and its own directory `~/.local/share/seamless-claude-accounts`, all with owner-only
 permissions. Usage, and whose a login is when its token changes, are read from

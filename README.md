@@ -266,7 +266,8 @@ started with its own `CLAUDE_CONFIG_DIR` is left alone.
 
 ## Security
 
-- Tokens never leave the daemon machine. The app receives addresses, plan names and
+- Tokens are stored on the daemon machine and sent only to Anthropic, to authenticate its own
+  usage and profile requests. The app receives addresses, plan names and
   percentages, never credentials. The plugin talks only to `api.anthropic.com`, with each
   account's own token: `/api/oauth/usage` for the meters, and `/api/oauth/profile` to learn whose a
   login is when the token in a config dir has changed.
