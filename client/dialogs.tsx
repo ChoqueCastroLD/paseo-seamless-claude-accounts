@@ -438,7 +438,6 @@ export function WhereDialog({ id, name, current, projects, onClose, onDone, s, t
             ))}
           </View>
         ) : null}
-        <Text style={s.muted}>{text.t("whereNote")}</Text>
         {error === "" ? null : <Text style={s.danger}>{error}</Text>}
         <View style={s.dialogActions}>
           <Button label={text.t("cancel")} kind="secondary" s={s} onPress={onClose} />

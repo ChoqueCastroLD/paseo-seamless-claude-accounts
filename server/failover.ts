@@ -36,17 +36,23 @@ export function hitLimit(outcome: Outcome, items: readonly Item[]): boolean {
 export class Failover {
   readonly #service: AccountService;
   readonly #preferences: () => Promise<Preferences>;
-  #lastSwitch = new Map<string, { at: number; from: string; to: string | null; nextReset: string | null }>();
+  readonly #projectOf: (workspaceId: string | null, paseo: PaseoApi) => Promise<string | null>;
+  #moved = new Map<string, { at: number; from: string | null; to: string | null; nextReset: string | null }>();
   #resumedAt = new Map<string, number>();
   #queue: Promise<unknown> = Promise.resolve();
 
-  constructor(service: AccountService, preferences: () => Promise<Preferences>) {
+  constructor(
+    service: AccountService,
+    preferences: () => Promise<Preferences>,
+    projectOf: (workspaceId: string | null, paseo: PaseoApi) => Promise<string | null>,
+  ) {
     this.#service = service;
     this.#preferences = preferences;
+    this.#projectOf = projectOf;
   }
 
   async onTurnEnded(
-    event: { agent: { id: string; provider: string }; outcome: Outcome },
+    event: { agent: { id: string; provider: string; workspaceId: string | null }; outcome: Outcome },
     paseo: PaseoApi,
   ): Promise<void> {
     if (event.agent.provider !== "claude") return;
@@ -62,14 +68,19 @@ export class Failover {
     )
       return;
 
-    const seat = await this.#service.seatOfAgent(event.agent.id);
-    const decision = await this.#switchAfterLimit(seat);
+    const project = await this.#projectOf(event.agent.workspaceId, paseo);
+    const decision = await this.#switchAfterLimit(project, !prefs.returnToPriority);
     const now = Date.now();
     const recently = this.#resumedAt.get(event.agent.id);
     const resume =
       decision.to !== null && prefs.autoContinue && (recently === undefined || now - recently > RESUME_EVERY_MS);
 
-    const row: SwitchRow = { from: decision.from, to: decision.to, reason: "limit", nextReset: decision.nextReset };
+    const row: SwitchRow = {
+      from: decision.from ?? "",
+      to: decision.to,
+      reason: "limit",
+      nextReset: decision.nextReset,
+    };
     await agent.timeline.append({
       type: "plugin",
       id: `account-switch-${now}`,
@@ -80,32 +91,39 @@ export class Failover {
     if (!resume) return;
     this.#resumedAt.set(event.agent.id, now);
     await agent.send(prefs.continuePrompt);
-    if (decision.to !== null) this.#service.noteResumed(seat, decision.to, 1);
+    if (decision.to !== null) this.#service.noteResumed(decision.to, 1);
   }
 
-  #switchAfterLimit(seat: string): Promise<{ from: string; to: string | null; nextReset: string | null }> {
+  #switchAfterLimit(
+    project: string | null,
+    sticky: boolean,
+  ): Promise<{ from: string | null; to: string | null; nextReset: string | null }> {
     const run = this.#queue.then(async () => {
       const now = Date.now();
-      const live = await this.#service.current(seat);
-      const last = this.#lastSwitch.get(seat);
-      if (last !== undefined && now - last.at < SETTLE_MS) {
-        return { from: last.from, to: last.to === live?.id ? last.to : null, nextReset: last.nextReset };
+      const scope = project ?? "";
+      const current = await this.#service.accountFor(project);
+      const last = this.#moved.get(scope);
+      if (last !== undefined && now - last.at < SETTLE_MS && (last.to === current || last.from === current)) {
+        return { from: last.from, to: last.to, nextReset: last.nextReset };
       }
-      if (live !== null) await this.#service.markExhausted(live.id, now);
-      const next = await this.#service.pickNext(seat, { now });
-      const switched = next.id !== null && (await this.#service.use(next.id, { seat, reason: "limit" })).ok;
-      const to = switched ? next.id : null;
-      const from = live?.id ?? "";
-      this.#lastSwitch.set(seat, { at: now, from, to, nextReset: next.nextReset });
-      return { from, to, nextReset: next.nextReset };
+      const before = await this.#service.placement();
+      const result = await this.#service.failover(project, sticky, now);
+      const after = await this.#service.placement();
+      const note = (key: string, from: string | null, to: string | null) => {
+        if (from !== to) this.#moved.set(key, { at: now, from, to, nextReset: null });
+      };
+      note("", before.default, after.default);
+      for (const [key, id] of Object.entries(after.projects)) note(key, before.projects[key] ?? before.default, id);
+      this.#moved.set(scope, { at: now, ...result });
+      return result;
     });
     this.#queue = run.catch(() => undefined);
     return run;
   }
 
-  async rebalance(): Promise<string[]> {
+  async rebalance(): Promise<boolean> {
     const prefs = await this.#preferences();
-    if (!prefs.preemptive && !prefs.returnToPriority) return [];
+    if (!prefs.preemptive && !prefs.returnToPriority) return false;
     const below = prefs.preemptive ? { session: prefs.sessionThreshold, week: prefs.weekThreshold } : undefined;
     const run = this.#queue.then(() => this.#service.rebalance({ below, returnToPriority: prefs.returnToPriority }));
     this.#queue = run.catch(() => undefined);

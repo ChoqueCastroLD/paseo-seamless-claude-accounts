@@ -4,6 +4,26 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [1.3.0] - 2026-10-23
+
+### Changed
+
+- Open chats follow every change immediately: priority, per-project accounts, failover and
+  thresholds. Each project's chats use a link as their config dir and the plugin repoints it;
+  Claude Code reads through it again on its next request. 1.2 project lanes are converted in
+  place, with their logins saved.
+- Each account has one config dir and one credential file shared by every chat on it, with its
+  own refresh lock, so one account can serve many projects at once.
+- "Only in selected projects" now means only those projects may use the account. It moves to the
+  top of the list so they spend it first. Projects use accounts strictly in priority order.
+- **Use** became **Use first**: it puts the account at the top of the list.
+- Running out moves every project on that account at once.
+
+### Removed
+
+- The "open chats follow after they restart" caveat, and the rule that an account could be live
+  in only one project.
+
 ## [1.2.1] - 2026-10-23
 
 ### Changed
@@ -79,6 +99,7 @@ All notable changes to this project are documented here. The format follows
 
 - First release: switch accounts by rewriting the live credential file.
 
+[1.3.0]: https://github.com/ChoqueCastroLD/paseo-seamless-claude-accounts/compare/v1.2.1...v1.3.0
 [1.2.1]: https://github.com/ChoqueCastroLD/paseo-seamless-claude-accounts/compare/v1.2.0...v1.2.1
 [1.2.0]: https://github.com/ChoqueCastroLD/paseo-seamless-claude-accounts/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/ChoqueCastroLD/paseo-seamless-claude-accounts/compare/v1.0.0...v1.1.0

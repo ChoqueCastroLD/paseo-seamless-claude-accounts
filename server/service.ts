@@ -1,21 +1,11 @@
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import type { Account, ErrorCode, HistoryEntry, SwitchReason } from "../shared/contracts.ts";
 import { slug } from "../shared/names.ts";
 import { peak } from "../shared/usage.ts";
 import { LoginError, LoginFlow } from "./login.ts";
-import {
-  choose,
-  dedicated,
-  eligible,
-  laneProjects,
-  outranks,
-  prioritized,
-  seatOf,
-  type Candidate,
-  type Placement,
-} from "./policy.ts";
-import { forget, renameIn, StateStore, type State } from "./state.ts";
-import { DEFAULT_SEAT, Store, StoreError, type Profile } from "./store.ts";
+import { plan, prioritized, promote, type Candidate, type Placement } from "./policy.ts";
+import { forget, renameIn, RulesStore } from "./state.ts";
+import { Store, StoreError, type Profile } from "./store.ts";
 import { fullUntil, UsageReader, type Usage } from "./usage.ts";
 
 const HISTORY_SIZE = 20;
@@ -28,24 +18,8 @@ export interface Thresholds {
   week: number;
 }
 
-export interface Listing {
-  accounts: Account[];
-  target: string;
-  history: HistoryEntry[];
-  seats: Record<string, string | null>;
-}
-
-class ServiceError extends Error {
-  readonly code: ErrorCode;
-
-  constructor(code: ErrorCode, message: string) {
-    super(message);
-    this.code = code;
-  }
-}
-
 function failure(error: unknown): Failure {
-  if (error instanceof StoreError || error instanceof LoginError || error instanceof ServiceError) {
+  if (error instanceof StoreError || error instanceof LoginError) {
     return { ok: false, error: error.code, detail: error.message };
   }
   return { ok: false, error: "io", detail: error instanceof Error ? error.message : String(error) };
@@ -73,16 +47,17 @@ export class AccountService {
   readonly store: Store;
   readonly usage: UsageReader;
   readonly login: LoginFlow;
-  readonly state: StateStore;
+  readonly rules: RulesStore;
   #history: HistoryEntry[] = [];
   #exhausted = new Map<string, number>();
   #fresh = new Set<string>();
   #logins = new Map<string, string>();
+  #queue: Promise<unknown> = Promise.resolve();
 
   constructor(options: { store: Store; usage: UsageReader; binary: string; loginArgs?: string[] }) {
     this.store = options.store;
     this.usage = options.usage;
-    this.state = new StateStore(join(options.store.paths.data, "state.json"));
+    this.rules = new RulesStore(join(options.store.paths.data, "state.json"));
     this.login = new LoginFlow({
       binary: options.binary,
       args: options.loginArgs,
@@ -90,45 +65,79 @@ export class AccountService {
     });
   }
 
+  #exclusive<T>(task: () => Promise<T>): Promise<T> {
+    const run = this.#queue.then(task, task);
+    this.#queue = run.catch(() => undefined);
+    return run;
+  }
+
   async #discardFresh(dir: string): Promise<void> {
     if (!this.#fresh.delete(dir)) return;
     await this.store.discard(dir);
   }
 
-  async #placement(): Promise<{ state: State; placement: Placement; profiles: Profile[] }> {
-    let state = await this.state.read();
-    const owner = await this.store.sync();
-    for (const [project, id] of Object.entries(state.seats)) {
-      if (id !== null) await this.store.sync(this.store.laneSeat(project), id);
-    }
-    const profiles = await this.store.profiles();
-    if (state.order.length === 0 && owner !== null) {
-      // Start from the account already in use, so nothing switches until the user reorders.
-      const rest = profiles.map((profile) => profile.id).filter((id) => id !== owner.id);
-      state = await this.state.update((next) => void (next.order = [owner.id, ...rest.sort()]));
-    }
-    const placement = {
-      order: state.order,
-      projects: state.projects,
-      live: { [DEFAULT_SEAT]: owner?.id ?? null, ...state.seats },
-    };
-    return { state, placement, profiles };
+  #accountOfDir(dir: string, defaultAccount: string | null): string | null {
+    if (dir === this.store.paths.live) return defaultAccount;
+    return dirname(dir) === dirname(this.store.accountSeat("x").dir) ? basename(dir) : null;
   }
 
-  async list(options: { refresh?: boolean; now?: number } = {}): Promise<Listing> {
+  #dirOf(id: string | null, defaultAccount: string | null): string {
+    return id === null || id === defaultAccount ? this.store.paths.live : this.store.accountSeat(id).dir;
+  }
+
+  // Saves every live login into its profile and converts 1.2 project lanes into links.
+  async #current(): Promise<{ placement: Placement; profiles: Profile[] }> {
+    const owner = await this.store.sync();
+    const defaultAccount = owner?.id ?? null;
+    for (const legacy of await this.store.legacyLanes()) {
+      const saved = await this.store.sync(legacy);
+      if (saved !== null && saved.id !== defaultAccount) {
+        await this.store.install(saved.id, this.store.accountSeat(saved.id), null);
+      }
+      await this.store.point(legacy.id, this.#dirOf(saved?.id ?? null, defaultAccount));
+    }
+    const projects: Record<string, string> = {};
+    for (const [project, dir] of await this.store.pointers()) {
+      const id = this.#accountOfDir(dir, defaultAccount);
+      if (id !== null) projects[project] = id;
+    }
+    for (const id of new Set(Object.values(projects))) {
+      if (id !== defaultAccount) await this.store.sync(this.store.accountSeat(id), id);
+    }
+    return { placement: { default: defaultAccount, projects }, profiles: await this.store.profiles() };
+  }
+
+  async list(options: { refresh?: boolean; now?: number } = {}): Promise<{
+    accounts: Account[];
+    target: string;
+    history: HistoryEntry[];
+  }> {
     const now = options.now ?? Date.now();
-    const { state, placement, profiles } = await this.#placement();
+    const { placement, profiles } = await this.#current();
+    let rules = await this.rules.read();
+    if (rules.order.length === 0 && placement.default !== null) {
+      // Start from the account already in use, so nothing switches until the user reorders.
+      const first = placement.default;
+      rules = await this.rules.update((next) => {
+        next.order = [first, ...profiles.map((profile) => profile.id).filter((id) => id !== first)];
+      });
+    }
     const ranking = prioritized(
       profiles.map((profile) => profile.id),
-      state.order,
+      rules.order,
     );
+    const usedBy = new Map<string, string[]>();
+    for (const [project, id] of Object.entries(placement.projects)) {
+      usedBy.set(id, [...(usedBy.get(id) ?? []), project]);
+    }
     const accounts = await Promise.all(
       profiles.map(async (profile): Promise<Account> => {
-        const seat = seatOf(placement, profile.id);
         const login = profile.login;
         const key = keyOf(profile);
         const usage = login === null ? null : await this.usage.read(key, login, { now, force: options.refresh });
         const until = this.#exhausted.get(key) ?? null;
+        const active = profile.id === placement.default;
+        const projects = usedBy.get(profile.id) ?? [];
         return {
           id: profile.id,
           email: profile.identity?.email ?? "",
@@ -138,13 +147,13 @@ export class AccountService {
           status:
             login === null
               ? "no-login"
-              : seat === null && login.refreshExpiresAt !== null && login.refreshExpiresAt <= now
+              : !active && projects.length === 0 && login.refreshExpiresAt !== null && login.refreshExpiresAt <= now
                 ? "relogin"
                 : "ready",
-          active: seat === DEFAULT_SEAT,
-          seat,
+          active,
+          usedBy: active ? [] : projects,
           priority: ranking.indexOf(profile.id) + 1,
-          projects: state.projects[profile.id] ?? [],
+          allowed: rules.allowed[profile.id] ?? [],
           usage,
           tokenExpiresAt: iso(login?.expiresAt ?? null),
           loginExpiresAt: iso(login?.refreshExpiresAt ?? null),
@@ -153,12 +162,7 @@ export class AccountService {
       }),
     );
     accounts.sort((a, b) => a.priority - b.priority);
-    return {
-      accounts,
-      target: this.store.liveCredentials,
-      history: [...this.#history],
-      seats: Object.fromEntries(Object.entries(placement.live).filter(([seat]) => seat !== DEFAULT_SEAT)),
-    };
+    return { accounts, target: this.store.liveCredentials, history: [...this.#history] };
   }
 
   #candidates(accounts: Account[], below?: Thresholds): Candidate[] {
@@ -173,90 +177,113 @@ export class AccountService {
     }));
   }
 
-  async #placementFrom(listing: Listing): Promise<Placement> {
-    const state = await this.state.read();
-    const live = listing.accounts.find((account) => account.active)?.id ?? null;
-    return { order: state.order, projects: state.projects, live: { [DEFAULT_SEAT]: live, ...listing.seats } };
+  // Projects leaving `~/.claude` move first and those arriving move last, so no chat ever reads a
+  // config dir whose login is mid-change.
+  #apply(reason: SwitchReason, options: { below?: Thresholds; sticky?: boolean; include?: string } = {}) {
+    return this.#exclusive(async () => {
+      const listing = await this.list();
+      const { placement: current } = await this.#current();
+      const rules = await this.rules.read();
+      const projects = [...new Set([...Object.keys(current.projects), ...(options.include ? [options.include] : [])])];
+      const next = plan(projects, this.#candidates(listing.accounts, options.below), rules, current, options.sticky);
+      const oldDefault = current.default;
+      const newDefault = next.default ?? oldDefault;
+      const live = new Set(Object.values(current.projects).filter((id) => id !== oldDefault));
+
+      for (const [project, id] of Object.entries(next.projects)) {
+        if (id === newDefault) continue;
+        if (!live.has(id)) {
+          await this.store.install(id, this.store.accountSeat(id), null);
+          live.add(id);
+        }
+        await this.store.point(project, this.store.accountSeat(id).dir);
+      }
+      if (newDefault !== null && newDefault !== oldDefault) await this.store.install(newDefault);
+      await this.store.linkDefaultSettings();
+      for (const [project, id] of Object.entries(next.projects)) {
+        if (id === newDefault) await this.store.point(project, this.store.paths.live);
+      }
+
+      const after: Placement = { default: newDefault, projects: next.projects };
+      await this.#record(reason, current, after);
+      return after;
+    });
   }
 
-  async #install(id: string, seat: string, reason: SwitchReason, owner: string | null): Promise<Profile> {
-    const target = seat === DEFAULT_SEAT ? this.store.defaultSeat : this.store.laneSeat(seat);
-    const { profile, changed, from } = await this.store.install(id, target, owner);
-    if (seat !== DEFAULT_SEAT) await this.state.update((state) => void (state.seats[seat] = id));
-    if (changed) {
-      this.#record({ at: new Date().toISOString(), seat, from: from?.id ?? "", to: id, reason, resumed: 0 });
-      this.usage.invalidate(keyOf(profile));
+  async #record(reason: SwitchReason, before: Placement, after: Placement): Promise<void> {
+    const moves = new Map<string, HistoryEntry>();
+    const note = (from: string | null, to: string | null, project: string | null) => {
+      if (to === null || from === to) return;
+      const key = `${from ?? ""}>${to}`;
+      const entry = moves.get(key) ?? {
+        at: new Date().toISOString(),
+        from: from ?? "",
+        to,
+        reason,
+        resumed: 0,
+        everywhere: false,
+        projects: [],
+      };
+      if (project === null) entry.everywhere = true;
+      else entry.projects.push(project);
+      moves.set(key, entry);
+    };
+    note(before.default, after.default, null);
+    for (const [project, id] of Object.entries(after.projects)) {
+      note(before.projects[project] ?? before.default, id, project);
     }
-    return profile;
+    if (moves.size === 0) return;
+    const profiles = await this.store.profiles();
+    for (const entry of moves.values()) {
+      this.#history = [entry, ...this.#history].slice(0, HISTORY_SIZE);
+      const target = profiles.find((candidate) => candidate.id === entry.to);
+      if (target !== undefined) this.usage.invalidate(keyOf(target));
+    }
   }
 
-  async use(
-    id: string,
-    options: { seat?: string; reason?: SwitchReason } = {},
-  ): Promise<{ ok: true; email: string } | Failure> {
+  noteResumed(to: string, count: number): void {
+    const entry = this.#history.find((candidate) => candidate.to === to);
+    if (entry !== undefined) entry.resumed += count;
+  }
+
+  // "Use" puts the account first, so it serves every project it is allowed in.
+  async use(id: string): Promise<{ ok: true; email: string } | Failure> {
     try {
       const listing = await this.list();
-      const placement = await this.#placementFrom(listing);
       const account = listing.accounts.find((candidate) => candidate.id === id);
       if (account === undefined) throw new StoreError("unknown-account", `no profile named ${id}`);
-      const seat =
-        options.seat ??
-        (dedicated(placement, id) ? (account.seat ?? placement.projects[id]?.[0] ?? DEFAULT_SEAT) : DEFAULT_SEAT);
+      if (account.status === "no-login") throw new StoreError("no-login", `${id} has no stored login`);
       const ids = listing.accounts.map((candidate) => candidate.id);
-      if (!eligible(seat, ids, placement).includes(id)) {
-        throw new ServiceError("not-allowed", `${id} is not allowed in ${seat}`);
-      }
-      const elsewhere = seatOf(placement, id);
-      if (elsewhere !== null && elsewhere !== seat) {
-        const others = this.#candidates(listing.accounts).filter((candidate) => candidate.id !== id);
-        const replacement = choose(elsewhere, others, placement);
-        if (replacement === null) throw new ServiceError("busy-elsewhere", elsewhere);
-        await this.#install(replacement, elsewhere, options.reason ?? "manual", id);
-        placement.live[elsewhere] = replacement;
-      }
-      const profile = await this.#install(id, seat, options.reason ?? "manual", placement.live[seat] ?? null);
-      return { ok: true, email: profile.identity?.email ?? "" };
+      await this.rules.update((rules) => void (rules.order = promote(rules.order, ids, id)));
+      await this.#apply("manual");
+      return { ok: true, email: account.email };
     } catch (error) {
       return failure(error);
     }
   }
 
-  #record(entry: HistoryEntry): void {
-    this.#history = [entry, ...this.#history].slice(0, HISTORY_SIZE);
-  }
-
-  noteResumed(seat: string, to: string, count: number): void {
-    const entry = this.#history.find((candidate) => candidate.seat === seat && candidate.to === to);
-    if (entry !== undefined) entry.resumed += count;
-  }
-
   async reorder(ids: string[]): Promise<void> {
-    await this.state.update((state) => {
-      state.order = [...new Set(ids)];
-    });
+    await this.rules.update((rules) => void (rules.order = [...new Set(ids)]));
+    await this.#apply("manual");
   }
 
+  // A limited account moves to the front: it competes nowhere else, so its projects spend it first.
   async assignProjects(id: string, projects: string[]): Promise<{ ok: true } | Failure> {
     try {
       const listing = await this.list();
       if (!listing.accounts.some((account) => account.id === id)) {
         throw new StoreError("unknown-account", `no profile named ${id}`);
       }
+      const ids = listing.accounts.map((account) => account.id);
       const next = [...new Set(projects)].sort();
-      await this.state.update((state) => {
-        state.projects = Object.fromEntries(Object.entries(state.projects).filter(([entry]) => entry !== id));
-        if (next.length > 0) state.projects[id] = next;
+      await this.rules.update((rules) => {
+        rules.allowed = Object.fromEntries(Object.entries(rules.allowed).filter(([entry]) => entry !== id));
+        if (next.length > 0) {
+          rules.allowed[id] = next;
+          rules.order = promote(rules.order, ids, id);
+        }
       });
-      // A newly dedicated account cannot stay in the shared seat.
-      const account = listing.accounts.find((candidate) => candidate.id === id);
-      if (next.length > 0 && account?.active) {
-        const placement = await this.#placementFrom(listing);
-        placement.projects[id] = next;
-        const others = this.#candidates(listing.accounts).filter((candidate) => candidate.id !== id);
-        const replacement = choose(DEFAULT_SEAT, others, placement);
-        if (replacement !== null) await this.#install(replacement, DEFAULT_SEAT, "manual", null);
-      }
-      await this.reconcile();
+      await this.#apply("manual");
       return { ok: true };
     } catch (error) {
       return failure(error);
@@ -265,8 +292,17 @@ export class AccountService {
 
   async rename(id: string, name: string): Promise<{ ok: true; id: string } | Failure> {
     try {
+      const { placement } = await this.#current();
       const next = await this.store.rename(id, name);
-      await this.state.update((state) => renameIn(state, id, next));
+      if (next !== id) {
+        await this.rules.update((rules) => renameIn(rules, id, next));
+        await this.store.renameAccountDir(id, next);
+        for (const [project, owner] of Object.entries(placement.projects)) {
+          if (owner === id && id !== placement.default) {
+            await this.store.point(project, this.store.accountSeat(next).dir);
+          }
+        }
+      }
       return { ok: true, id: next };
     } catch (error) {
       return failure(error);
@@ -275,101 +311,45 @@ export class AccountService {
 
   async remove(id: string): Promise<{ ok: true; trash: string } | Failure> {
     try {
-      const state = await this.state.read();
-      if (Object.values(state.seats).includes(id)) throw new StoreError("active-account", `${id} is in use`);
+      const { placement } = await this.#current();
+      if (Object.values(placement.projects).includes(id)) {
+        throw new StoreError("active-account", `${id} is in use`);
+      }
       const trash = await this.store.remove(id);
-      await this.state.update((next) => forget(next, id));
+      await this.rules.update((rules) => forget(rules, id));
       return { ok: true, trash };
     } catch (error) {
       return failure(error);
     }
   }
 
-  async reconcile(): Promise<void> {
-    const listing = await this.list();
-    const placement = await this.#placementFrom(listing);
-    const state = await this.state.read();
-    const lanes = new Set(laneProjects(placement));
-    const attached = new Set(Object.values(state.agents));
-    const candidates = this.#candidates(listing.accounts);
-
-    for (const [project, owner] of Object.entries(state.seats)) {
-      const inUse = attached.has(project);
-      const keeps = owner !== null && (inUse || placement.projects[owner]?.includes(project));
-      if (owner !== null && !keeps) {
-        await this.store.release(this.store.laneSeat(project), owner);
-        placement.live[project] = null;
-      }
-      if (!lanes.has(project) && !inUse) {
-        await this.state.update((next) => {
-          next.seats = Object.fromEntries(Object.entries(next.seats).filter(([entry]) => entry !== project));
-        });
-        placement.live[project] = null;
-      } else if (!keeps) {
-        await this.state.update((next) => void (next.seats[project] = null));
-      }
-    }
-
-    for (const project of lanes) {
-      if (placement.live[project]) continue;
-      const own = choose(project, candidates, placement);
-      if (own !== null && placement.projects[own]?.includes(project)) {
-        await this.#install(own, project, "manual", null);
-        placement.live[project] = own;
-      }
-    }
-  }
-
   async laneFor(project: string | null): Promise<string | null> {
     if (project === null) return null;
-    const listing = await this.list();
-    const placement = await this.#placementFrom(listing);
-    if (!laneProjects(placement).includes(project)) return null;
-    if (!placement.live[project]) {
-      const next = choose(project, this.#candidates(listing.accounts), placement);
-      if (next === null) return null;
-      await this.#install(next, project, "manual", null);
+    const { placement } = await this.#current();
+    if (placement.default === null) return null;
+    if (placement.projects[project] === undefined) {
+      await this.#apply("manual", { include: project, sticky: true });
     }
-    return this.store.laneSeat(project).dir;
+    return this.store.pointer(project);
   }
 
-  async openSession<Request extends { agentId: string; provider: string; env: Record<string, string> }>(
+  async openSession<Request extends { provider: string; env: Record<string, string> }>(
     request: Request,
     project: string | null,
   ): Promise<Request | undefined> {
     if (request.provider !== "claude" || request.env.CLAUDE_CONFIG_DIR !== undefined) return undefined;
     const lane = await this.laneFor(project);
-    if (lane === null || project === null) return undefined;
-    await this.attach(request.agentId, project);
+    if (lane === null) return undefined;
     return { ...request, env: { ...request.env, CLAUDE_CONFIG_DIR: lane } };
   }
 
-  async attach(agentId: string, project: string): Promise<void> {
-    await this.state.update((state) => void (state.agents[agentId] = project));
+  async placement(): Promise<Placement> {
+    return (await this.#current()).placement;
   }
 
-  async detach(agentIds: string[]): Promise<void> {
-    const state = await this.state.read();
-    if (!agentIds.some((id) => state.agents[id] !== undefined)) return;
-    await this.state.update((next) => {
-      next.agents = Object.fromEntries(Object.entries(next.agents).filter(([id]) => !agentIds.includes(id)));
-    });
-    await this.reconcile();
-  }
-
-  async prune(known: Set<string>): Promise<void> {
-    const state = await this.state.read();
-    await this.detach(Object.keys(state.agents).filter((id) => !known.has(id)));
-  }
-
-  async seatOfAgent(agentId: string): Promise<string> {
-    return (await this.state.read()).agents[agentId] ?? DEFAULT_SEAT;
-  }
-
-  async current(seat: string): Promise<{ id: string; key: string } | null> {
-    const { placement, profiles } = await this.#placement();
-    const profile = profiles.find((candidate) => candidate.id === placement.live[seat]);
-    return profile === undefined ? null : { id: profile.id, key: keyOf(profile) };
+  async accountFor(project: string | null): Promise<string | null> {
+    const { placement } = await this.#current();
+    return (project === null ? null : placement.projects[project]) ?? placement.default;
   }
 
   async markExhausted(id: string, now = Date.now()): Promise<void> {
@@ -381,60 +361,42 @@ export class AccountService {
     this.#exhausted.set(key, until === null ? now + DEFAULT_EXHAUSTION_MS : Date.parse(until));
   }
 
-  async pickNext(
-    seat: string = DEFAULT_SEAT,
-    options: { below?: Thresholds; now?: number } = {},
-  ): Promise<{ id: string | null; nextReset: string | null }> {
-    const now = options.now ?? Date.now();
-    const listing = await this.list({ now });
-    const placement = await this.#placementFrom(listing);
-    const current = placement.live[seat] ?? null;
-    const candidates = this.#candidates(listing.accounts, options.below).filter((c) => c.id !== current);
-    const ids = new Set(
-      eligible(
-        seat,
-        listing.accounts.map((account) => account.id),
-        placement,
-      ),
-    );
-    const resets = listing.accounts
-      .filter((account) => ids.has(account.id))
+  async failover(
+    project: string | null,
+    sticky: boolean,
+    now = Date.now(),
+  ): Promise<{ from: string | null; to: string | null; nextReset: string | null }> {
+    const from = await this.accountFor(project);
+    if (from !== null) await this.markExhausted(from, now);
+    const placement = await this.#apply("limit", { sticky });
+    const to = (project === null ? null : placement.projects[project]) ?? placement.default;
+    if (to !== null && to !== from) return { from, to, nextReset: null };
+    const { accounts } = await this.list({ now });
+    const resets = accounts
       .flatMap((account) => [account.exhaustedUntil, fullUntil(account.usage)])
       .filter((value): value is string => value !== null && Date.parse(value) > now)
       .sort();
-    return { id: choose(seat, candidates, placement), nextReset: resets[0] ?? null };
+    return { from, to: null, nextReset: resets[0] ?? null };
   }
 
-  async rebalance(options: { below?: Thresholds; returnToPriority: boolean }): Promise<string[]> {
-    const listing = await this.list();
-    const placement = await this.#placementFrom(listing);
-    const state = await this.state.read();
-    const attached = new Set(Object.values(state.agents));
-    const ids = listing.accounts.map((account) => account.id);
-    const changed: string[] = [];
-    const seats = [DEFAULT_SEAT, ...Object.keys(listing.seats).filter((seat) => attached.has(seat))];
-    for (const seat of seats) {
-      const current = placement.live[seat] ?? null;
-      const candidates = this.#candidates(listing.accounts, options.below);
-      const best = choose(seat, candidates, placement);
-      if (best === null || best === current) continue;
-      const unfit = current !== null && !candidates.find((candidate) => candidate.id === current)?.available;
-      const better = options.returnToPriority && outranks(seat, best, current, ids, placement);
-      if (!unfit && !better) continue;
-      await this.#install(best, seat, unfit ? "threshold" : "priority", current);
-      placement.live[seat] = best;
-      changed.push(seat);
-    }
-    return changed;
+  async rebalance(options: { below?: Thresholds; returnToPriority: boolean }): Promise<boolean> {
+    const before = this.#history[0];
+    await this.#apply(options.returnToPriority ? "priority" : "threshold", {
+      below: options.below,
+      sticky: !options.returnToPriority,
+    });
+    return this.#history[0] !== before;
   }
 
   async startLogin(name: string): Promise<{ ok: true; session: string; url: string; id: string } | Failure> {
     const id = slug(name);
     if (id === null) return failure(new StoreError("invalid-name", `invalid profile name: ${name}`));
     try {
-      const { placement } = await this.#placement();
+      const { placement } = await this.#current();
       // Two logins of one account would invalidate each other's refresh token.
-      if (seatOf(placement, id) !== null) throw new StoreError("active-account", `${id} is the account in use`);
+      if (placement.default === id || Object.values(placement.projects).includes(id)) {
+        throw new StoreError("active-account", `${id} is the account in use`);
+      }
       const existing = (await this.store.profiles()).find((profile) => profile.id === id);
       const dir = await this.store.prepare(id);
       if (existing === undefined) this.#fresh.add(dir);

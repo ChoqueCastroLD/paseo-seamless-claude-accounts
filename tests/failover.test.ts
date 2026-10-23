@@ -81,7 +81,7 @@ const limited = [
   { type: "assistant_message", text: "You've hit your session limit · resets 1am" },
 ];
 const turn = (id: string, provider = "claude") => ({
-  agent: { id, provider },
+  agent: { id, provider, workspaceId: null },
   outcome: { kind: "completed" } as const,
 });
 
@@ -100,8 +100,15 @@ describe("Failover", () => {
     await addProfile(f.home, "busy", { email: "b@x.io" });
     await setLive(f.home, { email: "m@x.io" });
     const { service: s } = service(f, byToken);
-    await s.reorder(["me", "spare", "busy"]);
-    return { s, failover: new Failover(s, async () => prefs) };
+    await s.rules.update((rules) => void (rules.order = ["me", "spare", "busy"]));
+    return {
+      s,
+      failover: new Failover(
+        s,
+        async () => prefs,
+        async () => null,
+      ),
+    };
   }
 
   const activeId = async (s: Awaited<ReturnType<typeof setup>>["s"]) =>
@@ -117,9 +124,7 @@ describe("Failover", () => {
     await failover.onTurnEnded(turn("a1"), paseo);
     assert.equal(await activeId(s), "spare");
     assert.deepEqual(sent, [["a1", "continue"]]);
-    assert.deepEqual(rows, [
-      ["a1", { from: "me", to: "spare", reason: "limit", nextReset: "2030-01-01T05:00:00.000Z" }],
-    ]);
+    assert.deepEqual(rows, [["a1", { from: "me", to: "spare", reason: "limit", nextReset: null }]]);
     const { history } = await s.list();
     assert.equal(history[0]?.reason, "limit");
     assert.equal(history[0]?.resumed, 1);
@@ -202,8 +207,12 @@ describe("Failover thresholds", () => {
     await addProfile(f.home, "spare", { email: "s@x.io" });
     await setLive(f.home, { email: "m@x.io" });
     const { service: s } = service(f, byToken);
-    await s.reorder(order);
-    await new Failover(s, async () => prefs).rebalance();
+    await s.rules.update((rules) => void (rules.order = order));
+    await new Failover(
+      s,
+      async () => prefs,
+      async () => null,
+    ).rebalance();
     return (await s.list()).accounts.find((account) => account.active)?.id;
   }
 

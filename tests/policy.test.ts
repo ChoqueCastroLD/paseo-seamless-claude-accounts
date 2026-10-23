@@ -1,50 +1,61 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { choose, eligible, laneProjects, outranks, prioritized, type Placement } from "../server/policy.ts";
+import { allows, plan, prioritized, promote, resolve, type Rules } from "../server/policy.ts";
 
-const placement = (overrides: Partial<Placement> = {}): Placement => ({
-  order: ["home", "spare", "work"],
-  projects: { work: ["acme"] },
-  live: { default: "home" },
+const rules = (overrides: Partial<Rules> = {}): Rules => ({
+  order: ["work", "home", "spare"],
+  allowed: { work: ["acme"] },
   ...overrides,
 });
-const ready = (id: string, available = true) => ({ id, ready: true, available });
+const ok = (id: string, available = true) => ({ id, ready: true, available });
+const all = [ok("work"), ok("home"), ok("spare")];
 
 describe("policy", () => {
   it("orders by the saved priority, then by name", () => {
     assert.deepEqual(prioritized(["zed", "spare", "home", "abe"], ["home", "spare"]), ["home", "spare", "abe", "zed"]);
   });
 
-  it("gives a project its dedicated accounts first, then the shared ones", () => {
-    const ids = ["home", "spare", "work"];
-    assert.deepEqual(eligible("acme", ids, placement()), ["work", "home", "spare"]);
-    assert.deepEqual(eligible("default", ids, placement()), ["home", "spare"]);
-    assert.deepEqual(eligible("other", ids, placement()), ["home", "spare"]);
+  it("limits an account to its projects", () => {
+    assert.ok(allows(rules(), "work", "acme"));
+    assert.ok(!allows(rules(), "work", "other"));
+    assert.ok(!allows(rules(), "work", null));
+    assert.ok(allows(rules(), "home", null));
   });
 
-  it("only gives lanes to projects that have dedicated accounts", () => {
-    assert.deepEqual(laneProjects(placement({ projects: { a: ["p2", "p1"], b: ["p1"], c: [] } })), ["p1", "p2"]);
+  it("gives each project the first allowed account with allowance left", () => {
+    assert.equal(resolve("acme", all, rules(), null), "work");
+    assert.equal(resolve("other", all, rules(), null), "home");
+    assert.equal(resolve(null, all, rules(), null), "home");
+    assert.equal(resolve("acme", [ok("work", false), ok("home"), ok("spare")], rules(), "work"), "home");
   });
 
-  it("chooses the best available account that is not live elsewhere", () => {
-    const candidates = [ready("home"), ready("spare"), ready("work")];
-    assert.equal(choose("acme", candidates, placement()), "work");
-    assert.equal(choose("acme", [ready("home"), ready("spare"), ready("work", false)], placement()), "spare");
-    assert.equal(choose("default", candidates, placement()), "home");
-    assert.equal(choose("acme", [ready("home"), ready("spare", false), ready("work", false)], placement()), null);
+  it("stays put when nothing it may use has allowance left", () => {
+    const empty = [ok("work", false), ok("home", false), ok("spare", false)];
+    assert.equal(resolve("acme", empty, rules(), "home"), "home");
+    assert.equal(resolve("acme", empty, rules(), null), "work");
+  });
+
+  it("leaves an account it may no longer use", () => {
+    assert.equal(resolve("other", [ok("work", false), ok("home", false)], rules(), "work"), "home");
+  });
+
+  it("keeps the current account while it lasts when sticky", () => {
+    assert.equal(resolve("other", all, rules(), "spare", true), "spare");
+    assert.equal(resolve("other", [ok("home"), ok("spare", false)], rules(), "spare", true), "home");
   });
 
   it("never picks an account that is not ready", () => {
-    assert.equal(
-      choose("default", [{ id: "home", ready: false, available: true }, ready("spare")], placement()),
-      "spare",
-    );
+    assert.equal(resolve(null, [{ id: "home", ready: false, available: true }, ok("spare")], rules(), null), "spare");
   });
 
-  it("ranks accounts within a seat", () => {
-    const ids = ["home", "spare", "work"];
-    assert.ok(outranks("acme", "work", "home", ids, placement()));
-    assert.ok(!outranks("acme", "spare", "home", ids, placement()));
-    assert.ok(outranks("default", "home", null, ids, placement()));
+  it("plans every project and the default together", () => {
+    assert.deepEqual(plan(["acme", "other"], all, rules(), { default: "home", projects: {} }), {
+      default: "home",
+      projects: { acme: "work", other: "home" },
+    });
+  });
+
+  it("puts an account first without losing the rest", () => {
+    assert.deepEqual(promote(["home", "spare"], ["home", "spare", "work"], "work"), ["work", "home", "spare"]);
   });
 });

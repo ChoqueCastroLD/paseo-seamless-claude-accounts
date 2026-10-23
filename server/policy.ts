@@ -1,15 +1,18 @@
-import { DEFAULT_SEAT } from "./store.ts";
-
 export interface Candidate {
   id: string;
   ready: boolean;
   available: boolean;
 }
 
-export interface Placement {
+export interface Rules {
   order: string[];
-  projects: Record<string, string[]>;
-  live: Record<string, string | null>;
+  // Absent or empty means every project.
+  allowed: Record<string, string[]>;
+}
+
+export interface Placement {
+  default: string | null;
+  projects: Record<string, string>;
 }
 
 export function prioritized(ids: string[], order: string[]): string[] {
@@ -17,47 +20,52 @@ export function prioritized(ids: string[], order: string[]): string[] {
   return [...known, ...ids.filter((id) => !known.includes(id)).sort()];
 }
 
-export function dedicated(placement: Placement, id: string): boolean {
-  return (placement.projects[id]?.length ?? 0) > 0;
+export function restricted(rules: Rules, id: string): boolean {
+  return (rules.allowed[id]?.length ?? 0) > 0;
 }
 
-export function laneProjects(placement: Placement): string[] {
-  return [...new Set(Object.values(placement.projects).flat())].sort();
+export function allows(rules: Rules, id: string, project: string | null): boolean {
+  if (!restricted(rules, id)) return true;
+  return project !== null && (rules.allowed[id]?.includes(project) ?? false);
 }
 
-export function eligible(seat: string, ids: string[], placement: Placement): string[] {
-  const ranked = prioritized(ids, placement.order);
-  const shared = ranked.filter((id) => !dedicated(placement, id));
-  if (seat === DEFAULT_SEAT) return shared;
-  const own = ranked.filter((id) => placement.projects[id]?.includes(seat));
-  return [...own, ...shared];
-}
-
-export function seatOf(placement: Placement, id: string): string | null {
-  return Object.entries(placement.live).find(([, owner]) => owner === id)?.[0] ?? null;
-}
-
-// One login live in two seats would have each copy retire the other's refresh token.
-export function choose(seat: string, candidates: Candidate[], placement: Placement): string | null {
+// With nothing available the current account stays, so a project never churns between used-up
+// accounts.
+export function resolve(
+  project: string | null,
+  candidates: Candidate[],
+  rules: Rules,
+  current: string | null,
+  sticky = false,
+): string | null {
   const byId = new Map(candidates.map((candidate) => [candidate.id, candidate]));
-  for (const id of eligible(
-    seat,
+  const usable = (id: string | null): id is string => {
+    const candidate = id === null ? undefined : byId.get(id);
+    return candidate !== undefined && candidate.ready && allows(rules, candidate.id, project);
+  };
+  if (sticky && usable(current) && byId.get(current)?.available) return current;
+  const ranked = prioritized(
     candidates.map((candidate) => candidate.id),
-    placement,
-  )) {
-    const candidate = byId.get(id);
-    const elsewhere = seatOf(placement, id);
-    if (candidate?.ready && candidate.available && (elsewhere === null || elsewhere === seat)) return id;
-  }
-  return null;
+    rules.order,
+  ).filter(usable);
+  return ranked.find((id) => byId.get(id)?.available) ?? (usable(current) ? current : (ranked[0] ?? null));
 }
 
-export function outranks(seat: string, next: string, current: string | null, ids: string[], placement: Placement) {
-  if (current === null) return true;
-  const ranking = eligible(seat, ids, placement);
-  const at = (id: string) => {
-    const index = ranking.indexOf(id);
-    return index === -1 ? Number.POSITIVE_INFINITY : index;
-  };
-  return at(next) < at(current);
+export function plan(
+  projects: string[],
+  candidates: Candidate[],
+  rules: Rules,
+  current: Placement,
+  sticky = false,
+): Placement {
+  const next: Placement = { default: resolve(null, candidates, rules, current.default, sticky), projects: {} };
+  for (const project of projects) {
+    const id = resolve(project, candidates, rules, current.projects[project] ?? current.default, sticky);
+    if (id !== null) next.projects[project] = id;
+  }
+  return next;
+}
+
+export function promote(order: string[], ids: string[], id: string): string[] {
+  return [id, ...prioritized(ids, order).filter((entry) => entry !== id)];
 }

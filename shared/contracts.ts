@@ -21,11 +21,13 @@ export const accountSchema = z.object({
   plan: z.string(),
   organization: z.string(),
   status: accountStatus,
+  // Serves the chats outside projects and every project that has no better account.
   active: z.boolean(),
-  // "default" for the shared config dir, a project id for that project's lane, null when idle.
-  seat: z.string().nullable(),
+  // Projects served by this account when it is not the active one.
+  usedBy: z.array(z.string()),
   priority: z.number().int(),
-  projects: z.array(z.string()),
+  // Projects the account is limited to; empty means every project.
+  allowed: z.array(z.string()),
   usage: usageSchema.nullable(),
   tokenExpiresAt: z.string().nullable(),
   loginExpiresAt: z.string().nullable(),
@@ -38,7 +40,8 @@ export type SwitchReason = z.infer<typeof switchReason>;
 
 const historyEntrySchema = z.object({
   at: z.string(),
-  seat: z.string(),
+  everywhere: z.boolean(),
+  projects: z.array(z.string()),
   from: z.string(),
   to: z.string(),
   reason: switchReason,
@@ -57,8 +60,6 @@ export const errorCode = z.enum([
   "login-failed",
   "login-duplicate",
   "claude-missing",
-  "not-allowed",
-  "busy-elsewhere",
   "io",
 ]);
 export type ErrorCode = z.infer<typeof errorCode>;
@@ -80,7 +81,7 @@ export const listAccounts = defineRpc({
 
 export const switchAccount = defineRpc({
   name: "seamless-claude.use",
-  input: z.object({ id: z.string(), seat: z.string().optional() }),
+  input: z.object({ id: z.string() }),
   output: z.discriminatedUnion("ok", [z.object({ ok: z.literal(true), email: z.string() }), failure]),
 });
 

@@ -18,13 +18,11 @@ no profile gets one automatically.
 
 ## Priority and projects
 
-Accounts are numbered and spent in that order: when the first runs out the next takes over, and
-the plugin goes back to the first once it frees up. An account can also be limited to selected
-projects. Chats in those projects use it first and the shared accounts after it runs out; other
-projects never use it. Such a project gets its own config directory that shares history and
-settings with `~/.claude` and keeps only the login apart. New chats follow these rules at once;
-chats already open follow them after they restart. An account is never live in two places at
-once, because the two copies would invalidate each other's refresh token.
+Accounts are numbered. Each project uses the first account it may use that has allowance left,
+moves to the next when it runs out, and moves back when an earlier one frees up. An account can
+be limited to selected projects: they spend it first and no other project uses it. Every change
+reaches open chats at once, without restarting them: each project's chats read their config dir
+through a link that the plugin repoints.
 
 ## Setup
 

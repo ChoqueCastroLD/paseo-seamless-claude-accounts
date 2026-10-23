@@ -6,6 +6,7 @@ import {
   mkdir,
   readdir,
   readFile,
+  readlink,
   rename,
   rm,
   stat,
@@ -63,7 +64,14 @@ export interface Seat {
   settings: string;
 }
 
-const LANE_PRIVATE = new Set([".credentials.json", ".claude.json"]);
+// The login and the refresh lock stay private: every chat on one account must share both.
+function isPrivate(name: string): boolean {
+  return name === ".credentials.json" || name === ".claude.json" || name.includes(".lock") || name.endsWith(".tmp");
+}
+
+function safeName(id: string): string {
+  return id.replace(/[^A-Za-z0-9_-]/g, "_");
+}
 
 export type StoreErrorCode =
   "unknown-account" | "no-login" | "invalid-login" | "invalid-name" | "name-taken" | "active-account";
@@ -230,9 +238,70 @@ export class Store {
     return { id: DEFAULT_SEAT, dir: this.paths.live, settings: this.paths.liveSettings };
   }
 
-  laneSeat(projectId: string): Seat {
-    const dir = join(this.paths.data, "lanes", projectId.replace(/[^A-Za-z0-9_-]/g, "_"));
-    return { id: projectId, dir, settings: join(dir, ".claude.json") };
+  accountSeat(id: string): Seat {
+    const dir = join(this.paths.data, "accounts", safeName(id));
+    return { id, dir, settings: join(dir, ".claude.json") };
+  }
+
+  pointer(project: string): string {
+    return join(this.paths.data, "lanes", safeName(project));
+  }
+
+  async pointers(): Promise<Map<string, string>> {
+    const root = join(this.paths.data, "lanes");
+    const targets = new Map<string, string>();
+    for (const name of await readdir(root).catch(() => [] as string[])) {
+      if (name.startsWith(".")) continue;
+      const target = await readlink(join(root, name)).catch(() => null);
+      if (target !== null) targets.set(name, target);
+    }
+    return targets;
+  }
+
+  // One rename, so open chats follow the link on their next request and never see it missing.
+  point(project: string, dir: string): Promise<void> {
+    return this.#exclusive(async () => {
+      const path = this.pointer(project);
+      await mkdir(dirname(path), { recursive: true, mode: 0o700 });
+      if ((await readlink(path).catch(() => null)) === dir) return;
+      const temp = join(dirname(path), `.${basename(path)}.${randomBytes(6).toString("hex")}`);
+      await symlink(dir, temp);
+      const existing = await lstat(path).catch(() => null);
+      if (existing?.isDirectory()) {
+        // A 1.2 lane: a real directory chats already opened with. Its login is saved by the caller.
+        await mkdir(join(this.paths.data, "trash"), { recursive: true, mode: 0o700 });
+        await rename(path, join(this.paths.data, "trash", `lane-${basename(path)}-${Date.now()}`));
+      }
+      await rename(temp, path);
+    });
+  }
+
+  async legacyLanes(): Promise<Seat[]> {
+    const root = join(this.paths.data, "lanes");
+    const seats: Seat[] = [];
+    for (const name of await readdir(root).catch(() => [] as string[])) {
+      const dir = join(root, name);
+      if ((await lstat(dir).catch(() => null))?.isDirectory()) {
+        seats.push({ id: name, dir, settings: join(dir, ".claude.json") });
+      }
+    }
+    return seats;
+  }
+
+  // A chat whose config dir is `~/.claude` reads `~/.claude/.claude.json`, not `~/.claude.json`.
+  async linkDefaultSettings(): Promise<void> {
+    const inside = join(this.paths.live, ".claude.json");
+    if (inside === this.paths.liveSettings || (await lstat(inside).catch(() => null)) !== null) return;
+    await mkdir(this.paths.live, { recursive: true });
+    await symlink(this.paths.liveSettings, inside);
+  }
+
+  renameAccountDir(from: string, to: string): Promise<void> {
+    return this.#exclusive(async () => {
+      const source = this.accountSeat(from).dir;
+      if ((await lstat(source).catch(() => null)) === null) return;
+      await rename(source, this.accountSeat(to).dir);
+    });
   }
 
   // Claude Code renews tokens in the live file only and each renewal retires the previous refresh
@@ -274,11 +343,10 @@ export class Store {
     return { ...owner, login: newer ? login : stored, identity: owner.identity ?? live.identity };
   }
 
-  // A lane shares everything in the default config dir, history included, except the login.
   async #prepareLane(seat: Seat): Promise<void> {
     await mkdir(seat.dir, { recursive: true, mode: 0o700 });
     for (const name of await readdir(this.paths.live).catch(() => [] as string[])) {
-      if (LANE_PRIVATE.has(name) || name.endsWith(".tmp") || name.endsWith(".lock")) continue;
+      if (isPrivate(name)) continue;
       const link = join(seat.dir, name);
       if (
         await lstat(link).then(
@@ -327,20 +395,19 @@ export class Store {
       await writeAtomic(credentials, raw);
       // Without this Claude Code keeps showing the previous account's address.
       const block = (await readJson(join(profile.dir, ".claude.json")))?.oauthAccount;
-      if (block !== undefined) await writeAccountBlock(seat.settings, block);
+      if (block !== undefined) {
+        await writeAccountBlock(seat.settings, block);
+        const inside = join(seat.dir, ".claude.json");
+        if (inside !== seat.settings && (await lstat(inside).catch(() => null))?.isFile()) {
+          await writeAccountBlock(inside, block);
+        }
+      }
 
       if ((await readText(credentials)) !== raw) {
         // Claude Code renewed the old token mid-switch and its write won.
         throw new StoreError("invalid-login", "the live login changed while switching; try again");
       }
       return { profile, changed: true, from };
-    });
-  }
-
-  release(seat: Seat, owner: string): Promise<void> {
-    return this.#exclusive(async () => {
-      await this.#sync(seat, owner);
-      await rm(join(seat.dir, ".credentials.json"), { force: true });
     });
   }
 

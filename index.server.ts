@@ -54,8 +54,6 @@ export default function contribute(server: PluginServerContext) {
     const state = await settings.read();
     return state.status === "ready" ? state.values : defaults;
   };
-  const failover = new Failover(service, readPreferences);
-
   type Paseo = PluginHandlerContext["paseo"];
   const projectOf = new Map<string, string>();
   const resolveProject = async (workspaceId: string | null, paseo: Paseo): Promise<string | null> => {
@@ -66,23 +64,16 @@ export default function contribute(server: PluginServerContext) {
     }
     return projectOf.get(workspaceId) ?? null;
   };
+  const failover = new Failover(service, readPreferences, resolveProject);
 
   server.handle(listAccounts, async ({ refresh }, { paseo }) => {
-    const [listing, projects, agents] = await Promise.all([
-      service.list({ refresh }),
-      paseo.projects.list(),
-      paseo.agents.list(),
-    ]);
-    const open = agents.entries
-      .filter(({ agent }) => agent.status !== "closed" && agent.archivedAt == null)
-      .map(({ agent }) => agent.id);
-    await service.prune(new Set(open));
+    const [listing, projects] = await Promise.all([service.list({ refresh }), paseo.projects.list()]);
     return {
       ...listing,
       projects: projects.projects.map((project) => ({ id: project.projectId, name: project.projectDisplayName })),
     };
   });
-  server.handle(switchAccount, ({ id, seat }) => service.use(id, { seat }));
+  server.handle(switchAccount, ({ id }) => service.use(id));
   server.handle(reorderAccounts, async ({ ids }) => {
     await service.reorder(ids);
     return {};
@@ -98,11 +89,9 @@ export default function contribute(server: PluginServerContext) {
   });
 
   server.on("agent.turn_ended", (event, { paseo }) => failover.onTurnEnded(event, paseo));
-  server.on("agent.closed", (event) => service.detach([event.agent.id]));
-  server.on("agent.archived", (event) => service.detach([event.agent.id]));
 
-  // A project with dedicated accounts gets its own config dir, so its chats can be on another
-  // account than the rest while sharing history, settings and everything else.
+  // Each project's chats open through a link to their account's config dir. Repointing the link
+  // moves every open chat of the project to another account on its next request.
   server.before("agent.session_open", async ({ request }, { paseo }) => {
     if (request.provider !== "claude") return;
     return service.openSession(request, await resolveProject(request.workspaceId, paseo));

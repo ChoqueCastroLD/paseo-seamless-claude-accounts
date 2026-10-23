@@ -81,9 +81,13 @@ function History({ entries, projectNames, now, s, text }: HistoryProps) {
   };
   const describe = (entry: HistoryEntry) => {
     const line = text.t("historyEntry", { from: entry.from || "–", to: entry.to });
-    if (entry.seat === "default") return line;
-    return text.t("historyIn", { entry: line, project: projectNames.get(entry.seat) ?? entry.seat });
+    if (entry.everywhere || entry.projects.length === 0) return line;
+    const projects = entry.projects.map((id) => projectNames.get(id) ?? id).sort();
+    const shown =
+      projects.length <= 2 ? projects.join(", ") : `${projects.slice(0, 2).join(", ")} +${projects.length - 2}`;
+    return text.t("historyIn", { entry: line, project: shown });
   };
+
   return (
     <View style={{ gap: 4 }}>
       <Text style={s.sectionTitle}>{text.t("history")}</Text>
@@ -261,7 +265,7 @@ export function AccountsScreen({
         <WhereDialog
           id={dialog.account.id}
           name={dialog.account.email || dialog.account.id}
-          current={dialog.account.projects}
+          current={dialog.account.allowed}
           projects={projects}
           onClose={close}
           onDone={done}

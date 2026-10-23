@@ -47,7 +47,8 @@ chat to carry on.
 - **Priority order.** Number your accounts. The first one with allowance left is spent first,
   and when a higher one frees up again the plugin goes back to it.
 - **Accounts per project.** Keep a work account for the work project only. Its chats use that
-  account first and the shared ones after it runs out; no other project ever touches it.
+  account first and the others after it runs out; no other project ever touches it. Open chats
+  follow every change immediately.
 - **Automatic failover.** When a chat stops with _"You've hit your session limit"_, the plugin
   moves to the account with the most allowance left and resumes every chat that stopped.
 - **Preemptive thresholds.** Optionally switch before the limit, when the 5-hour window reaches
@@ -105,7 +106,7 @@ composer.
 
 | Action                        | Where                                                                                |
 | ----------------------------- | ------------------------------------------------------------------------------------ |
-| Switch account                | **Use** on a card, `⌘K` → _Use: you@example.com_, or `/account work`                 |
+| Switch account                | **Use first** on a card, `⌘K` → _Use: you@example.com_, or `/account work`           |
 | Add an account                | **Add account**, name the profile, open the link, paste the code                     |
 | Renew an expired sign-in      | **Sign in again** on the card                                                        |
 | Change the priority order     | **⋯** on a card → **Move up** / **Move down**                                        |
@@ -126,27 +127,19 @@ shows up as the account `work`.
 
 ## Priority and projects
 
-Accounts are numbered. Number 1 is spent first; when it runs out the next one takes over, and
-when number 1 frees up again the plugin switches back to it. The order starts with the account
-already in use, so installing the plugin changes nothing until you reorder.
+Accounts are numbered. Every project uses the first account in the list that it may use and that
+still has allowance left; when that account runs out, its projects move to the next one, and when
+an earlier account frees up they move back. **Use first** on a card puts that account at the top.
+The order starts with the account already in use, so installing the plugin changes nothing.
 
-Each account is either **shared** (the default) or limited to **selected projects**:
+An account can be limited to **selected projects**. Only those projects use it, and it moves to the
+top of the list so they spend it first; every other project skips it. With a company account
+limited to the company project, company chats spend it first and fall back to your other accounts
+when it runs out, while every other project never touches it.
 
-| Chats in…                          | Use, in order                              |
-| ---------------------------------- | ------------------------------------------ |
-| A project with accounts of its own | Its own accounts, then the shared accounts |
-| Any other project                  | The shared accounts                        |
-
-For example, with a personal account and a spare shared everywhere, and a company account
-limited to the company project: company chats spend the company account first and fall back to
-the personal one, while every other chat uses only the personal account and the spare.
-
-An account is live in one place at a time. Two copies of one login would each retire the
-other's refresh token, so a shared account in use by a project is skipped elsewhere until that
-project no longer needs it. A project holds a shared account only while it has open chats.
-
-New chats follow a change immediately. Chats that were already open follow it the next time
-their session restarts, because a chat reads its config directory when it starts.
+Every change applies to open chats at once, without restarting them. Each project's chats use a
+link as their config dir, and switching the project's account repoints the link; Claude Code reads
+through it again on its next request.
 
 ## Automatic switching
 
@@ -196,11 +189,15 @@ every open chat, history intact
 5. **Failover** listens to Paseo's `agent.turn_ended` hook. The first chat to hit a limit
    switches; chats that hit it in the same moment follow that switch instead of starting another.
 
-6. **Projects with accounts of their own** get a lane: a directory under
-   `~/.local/share/seamless-claude-accounts/lanes/` that links to every entry of `~/.claude`
-   (history, settings, plugins) except the login, which it keeps for itself. A Paseo
-   `agent.session_open` hook starts that project's Claude chats with `CLAUDE_CONFIG_DIR` pointing
-   at the lane, so switching their account is the same one-file rewrite as everywhere else.
+6. **Projects** open their Claude chats with `CLAUDE_CONFIG_DIR` set to a link under
+   `~/.local/share/seamless-claude-accounts/lanes/`, through a Paseo `agent.session_open` hook.
+   The link points at the config dir of the project's account: `~/.claude` for the account in
+   use everywhere else, or `~/.local/share/seamless-claude-accounts/accounts/<name>`, which links
+   to every entry of `~/.claude` (history, settings, plugins) except the login and the refresh
+   lock. Switching a project repoints its link in one rename.
+7. **One account, one login file.** All chats on an account share one credential file and one
+   refresh lock, as Claude Code expects, so a token renewal in one chat never invalidates
+   another.
 
 `CLAUDE_CONFIG_DIR` set on the daemon is respected: that directory is then the live one. A chat
 started with its own `CLAUDE_CONFIG_DIR` is left alone.
@@ -224,8 +221,9 @@ See [SECURITY.md](SECURITY.md) to report a vulnerability.
 ## Limitations
 
 - **Accounts follow projects, not single chats.** Every chat in a project uses that project's
-  account. Per-chat accounts would need each chat to restart on every switch.
-- **Open chats adopt a new project rule when they restart.** New chats follow it immediately.
+  account.
+- **Chats opened before version 1.3** follow the account in `~/.claude` until they restart once;
+  from then on they follow their project.
 - **A rare race with token renewal.** If Claude Code renews the old token in the same instant,
   its write can win. The plugin detects this and reports it; switching again fixes it.
 - **macOS Keychain logins are not supported.** The plugin reads and writes the credential file.

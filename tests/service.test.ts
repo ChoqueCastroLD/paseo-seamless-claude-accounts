@@ -21,14 +21,14 @@ describe("AccountService.list", () => {
       "at-i@x.io": { five: 5, week: 5 },
       "at-m@x.io": { five: 50, week: 50 },
     });
-    await s.reorder(["idle", "me"]);
+    await s.rules.update((rules) => void (rules.order = ["idle", "me"]));
     const { accounts, target } = await s.list();
     assert.deepEqual(
-      accounts.map((account) => [account.id, account.priority, account.active, account.seat]),
+      accounts.map((account) => [account.id, account.priority, account.active]),
       [
-        ["idle", 1, false, null],
-        ["me", 2, true, "default"],
-        ["busy", 3, false, null],
+        ["idle", 1, false],
+        ["me", 2, true],
+        ["busy", 3, false],
       ],
     );
     assert.equal(target, join(f.home, ".claude", ".credentials.json"));
@@ -61,17 +61,17 @@ describe("AccountService.use", () => {
   beforeEach(async () => (f = await fixture()));
   afterEach(() => f.cleanup());
 
-  it("switches and records it in the history", async () => {
+  it("switches by putting the account first, and records it in the history", async () => {
     await addProfile(f.home, "work", { email: "w@x.io" });
     await setLive(f.home, { email: "h@x.io" });
     const { service: s } = service(f);
     assert.deepEqual(await s.use("work"), { ok: true, email: "w@x.io" });
     const { accounts, history } = await s.list();
     assert.equal(accounts.find((account) => account.active)?.id, "work");
-    assert.equal(history.length, 1);
+    assert.equal(accounts[0]?.id, "work");
     assert.deepEqual(
       { ...history[0], at: "" },
-      { at: "", seat: "default", from: "h", to: "work", reason: "manual", resumed: 0 },
+      { at: "", from: "h", to: "work", reason: "manual", resumed: 0, everywhere: true, projects: [] },
     );
   });
 
@@ -83,36 +83,31 @@ describe("AccountService.use", () => {
   });
 });
 
-describe("AccountService.pickNext", () => {
+describe("AccountService.failover", () => {
   let f: Fixture;
   beforeEach(async () => (f = await fixture()));
   afterEach(() => f.cleanup());
 
-  it("picks the first account in priority order that still has allowance", async () => {
+  it("moves to the next account in priority order that still has allowance", async () => {
     await addProfile(f.home, "a", { email: "a@x.io" });
     await addProfile(f.home, "b", { email: "b@x.io" });
     await addProfile(f.home, "full", { email: "f@x.io" });
     await setLive(f.home, { email: "m@x.io" });
     const { service: s } = service(f, {
+      "at-m@x.io": { five: 100, week: 10 },
       "at-a@x.io": { five: 60, week: 10 },
-      "at-b@x.io": { five: 20, week: 30 },
       "at-f@x.io": { five: 100, week: 1 },
     });
-    await s.reorder(["full", "a", "b"]);
-    assert.equal((await s.pickNext()).id, "a");
-    assert.equal((await s.pickNext("default", { below: { session: 50, week: 50 } })).id, "b");
-    assert.equal((await s.pickNext("default", { below: { session: 10, week: 50 } })).id, null);
+    await s.rules.update((rules) => void (rules.order = ["m", "full", "a", "b"]));
+    assert.deepEqual(await s.failover(null, false), { from: "m", to: "a", nextReset: null });
   });
 
-  it("skips an account marked as used up and reports when one frees up", async () => {
+  it("reports when an account frees up if none is left", async () => {
     await addProfile(f.home, "a", { email: "a@x.io" });
     await setLive(f.home, { email: "m@x.io" });
     const { service: s } = service(f, { "at-m@x.io": { five: 100, week: 50 }, "at-a@x.io": { five: 100, week: 50 } });
-    const live = await s.current("default");
-    await s.markExhausted(live!.id);
-    const next = await s.pickNext();
-    assert.equal(next.id, null);
-    assert.equal(next.nextReset, "2030-01-01T05:00:00.000Z");
+    const result = await s.failover(null, false);
+    assert.deepEqual(result, { from: "m", to: null, nextReset: "2030-01-01T05:00:00.000Z" });
   });
 });
 

@@ -120,18 +120,18 @@ export function AccountCard({ account, count, projectNames, busy, now, s, text, 
     account.status === "ready" &&
     account.loginExpiresAt !== null &&
     Date.parse(account.loginExpiresAt) - now < LOGIN_WARNING_MS;
-  const live = account.seat !== null;
-  const projectName = (id: string) => projectNames.get(id) ?? id;
-  const badge =
-    account.seat === null
-      ? null
-      : account.active
-        ? text.t("active")
-        : text.t("inUseIn", { project: projectName(account.seat) });
+  const live = account.active || account.usedBy.length > 0;
+  const names = (ids: string[]) => {
+    const shown = ids.map((id) => projectNames.get(id) ?? id).sort();
+    return shown.length <= 2 ? shown.join(", ") : `${shown.slice(0, 2).join(", ")} +${shown.length - 2}`;
+  };
+  const badge = account.active
+    ? text.t("active")
+    : account.usedBy.length > 0
+      ? text.t("inUseIn", { project: names(account.usedBy) })
+      : null;
   const scope =
-    account.projects.length === 0
-      ? text.t("scopeAll")
-      : text.t("scopeOnly", { projects: account.projects.map(projectName).join(", ") });
+    account.allowed.length === 0 ? text.t("scopeAll") : text.t("scopeOnly", { projects: names(account.allowed) });
   const staleSince =
     account.usage !== null && now - Date.parse(account.usage.fetchedAt) > STALE_MS ? account.usage.fetchedAt : null;
 
@@ -150,28 +150,29 @@ export function AccountCard({ account, count, projectNames, busy, now, s, text, 
     ...(live ? [] : [{ icon: "Trash2", label: text.t("remove"), danger: true, run: () => actions.onRemove(account) }]),
   ];
 
-  const primary = live ? null : account.status === "ready" ? (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityLabel={`${text.t("use")} ${title}`}
-      accessibilityState={{ disabled: busy, busy }}
-      disabled={busy}
-      onPress={() => actions.onUse(account)}
-      style={[s.primary, s.compact ? s.fill : null, busy ? s.disabled : null]}
-    >
-      <Icon name="ArrowLeftRight" size={16} color={s.colors.accentForeground} />
-      <Text style={s.primaryText}>{busy ? text.t("switching") : text.t("use")}</Text>
-    </Pressable>
-  ) : (
-    <Pressable
-      accessibilityRole="button"
-      onPress={() => actions.onSignIn(account)}
-      style={[s.primary, s.compact ? s.fill : null]}
-    >
-      <Icon name="LogIn" size={16} color={s.colors.accentForeground} />
-      <Text style={s.primaryText}>{text.t("signIn")}</Text>
-    </Pressable>
-  );
+  const primary =
+    account.active || account.priority === 1 ? null : account.status === "ready" ? (
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={`${text.t("useFirst")} ${title}`}
+        accessibilityState={{ disabled: busy, busy }}
+        disabled={busy}
+        onPress={() => actions.onUse(account)}
+        style={[s.primary, s.compact ? s.fill : null, busy ? s.disabled : null]}
+      >
+        <Icon name="ArrowLeftRight" size={16} color={s.colors.accentForeground} />
+        <Text style={s.primaryText}>{busy ? text.t("switching") : text.t("useFirst")}</Text>
+      </Pressable>
+    ) : (
+      <Pressable
+        accessibilityRole="button"
+        onPress={() => actions.onSignIn(account)}
+        style={[s.primary, s.compact ? s.fill : null]}
+      >
+        <Icon name="LogIn" size={16} color={s.colors.accentForeground} />
+        <Text style={s.primaryText}>{text.t("signIn")}</Text>
+      </Pressable>
+    );
 
   const more = (
     <Pressable
@@ -213,7 +214,7 @@ export function AccountCard({ account, count, projectNames, busy, now, s, text, 
           </Text>
           <View style={[s.wrapRow, { gap: 4 }]}>
             <Icon
-              name={account.projects.length === 0 ? "Globe" : "FolderLock"}
+              name={account.allowed.length === 0 ? "Globe" : "FolderLock"}
               size={12}
               color={s.colors.foregroundMuted}
             />
