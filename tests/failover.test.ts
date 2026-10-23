@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { afterEach, beforeEach, describe, it } from "node:test";
 import { preferences, type Preferences } from "../shared/contracts.ts";
 import { Failover, hitLimit, isLimitNotice } from "../server/failover.ts";
+import { CACHE_TTL_MS } from "../server/service.ts";
 import { addProfile, fixture, service, setLive, type Fixture } from "./helpers.ts";
 
 describe("isLimitNotice", () => {
@@ -232,10 +233,20 @@ describe("Failover thresholds", () => {
     assert.equal(await run({ "at-m@x.io": { five: 95, week: 10 }, "at-s@x.io": { five: 5, week: 91 } }), "me");
   });
 
-  it("returns to a higher-priority account once it frees up", async () => {
+  it("waits to go back to a higher-priority account while chats are warm in the cache", async () => {
     prefs = { ...prefs, preemptive: false };
     const usage = { "at-m@x.io": { five: 10, week: 10 }, "at-s@x.io": { five: 5, week: 5 } };
-    assert.equal(await run(usage, ["spare", "me"]), "spare");
+    assert.equal(await run(usage, ["spare", "me"]), "me");
+  });
+
+  it("goes back to a higher-priority account once chats have been quiet for the cache lifetime", async () => {
+    await addProfile(f.home, "me", { email: "m@x.io" });
+    await addProfile(f.home, "spare", { email: "s@x.io" });
+    await setLive(f.home, { email: "m@x.io" });
+    const { service: s } = service(f, { "at-m@x.io": { five: 10, week: 10 }, "at-s@x.io": { five: 5, week: 5 } });
+    await s.rules.update((rules) => void (rules.order = ["spare", "me"]));
+    await s.rebalance({ returnToPriority: true, now: Date.now() + CACHE_TTL_MS + 60_000 });
+    assert.equal((await s.list()).accounts.find((account) => account.active)?.id, "spare");
   });
 
   it("keeps the current account when returning to priority is off", async () => {

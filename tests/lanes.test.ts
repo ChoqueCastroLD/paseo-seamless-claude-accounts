@@ -86,6 +86,19 @@ describe("accounts per workspace", () => {
     assert.ok(accounts.find((account) => account.id === "work")?.allowed.includes("prj_new"));
   });
 
+  it("starts an account's settings from the current ones, with its own account block", async () => {
+    const s = await setup();
+    await writeFile(
+      join(f.home, ".claude.json"),
+      JSON.stringify({ mcpServers: { docs: { command: "docs" } }, oauthAccount: { emailAddress: "h@x.io" } }),
+    );
+    await s.laneFor("ws_acme");
+    await s.assignWorkspace("ws_acme", ["work"]);
+    const settings = JSON.parse(await readFile(join(accountDir("work"), ".claude.json"), "utf8"));
+    assert.deepEqual(settings.mcpServers, { docs: { command: "docs" } });
+    assert.equal(settings.oauthAccount.emailAddress, "w@x.io");
+  });
+
   it("gives an account's dir everything in ~/.claude except its login and lock", async () => {
     const s = await setup();
     await writeFile(join(f.home, ".claude", ".oauth_refresh.lock"), "");

@@ -20,6 +20,9 @@ import { Store, StoreError, type Profile } from "./store.ts";
 import { fullUntil, UsageReader, type Usage } from "./usage.ts";
 
 const HISTORY_SIZE = 20;
+// Claude Code caches prompts for an hour. A chat quiet for that long has nothing cached, so moving
+// it to another account costs nothing; a busier one would resend its whole context uncached.
+export const CACHE_TTL_MS = 60 * 60_000;
 const DEFAULT_EXHAUSTION_MS = 60 * 60_000;
 
 export type Failure = { ok: false; error: ErrorCode; detail: string };
@@ -71,7 +74,7 @@ export interface Failed {
 
 interface ApplyOptions {
   below?: Thresholds;
-  sticky?: boolean;
+  sticky?: boolean | ((scope: string | null) => boolean);
   include?: string;
 }
 
@@ -93,6 +96,10 @@ export class AccountService {
   #logins = new Map<string, string>();
   #queue: Promise<unknown> = Promise.resolve();
   #projects: string[] = [];
+  // Scope ("" for chats outside workspaces) to its last turn. Unknown scopes count as active since
+  // the plugin started, so nothing is moved before its cache could have expired.
+  #activity = new Map<string, number>();
+  readonly #startedAt = Date.now();
 
   constructor(options: { store: Store; usage: UsageReader; binary: string; loginArgs?: string[] }) {
     this.store = options.store;
@@ -544,11 +551,25 @@ export class AccountService {
     });
   }
 
-  async rebalance(options: { below?: Thresholds; returnToPriority: boolean }): Promise<boolean> {
+  /** Notes that a chat is working, so its workspace is not moved while its prompt cache is warm. */
+  async touch(agentId: string, now = Date.now()): Promise<void> {
+    this.#activity.set((await this.rules.read()).opened[agentId] ?? "", now);
+  }
+
+  #warm(scope: string | null, now: number): boolean {
+    return now - (this.#activity.get(scope ?? "") ?? this.#startedAt) < CACHE_TTL_MS;
+  }
+
+  /**
+   * Applies the thresholds and the priority order. Going back to a higher-priority account waits
+   * until the workspace's chats have been quiet for the cache lifetime, so it costs no tokens.
+   */
+  async rebalance(options: { below?: Thresholds; returnToPriority: boolean; now?: number }): Promise<boolean> {
+    const now = options.now ?? Date.now();
     const before = this.#history[0];
     await this.#apply(options.returnToPriority ? "priority" : "threshold", {
       below: options.below,
-      sticky: !options.returnToPriority,
+      sticky: options.returnToPriority ? (scope) => this.#warm(scope, now) : true,
     });
     return this.#history[0] !== before;
   }

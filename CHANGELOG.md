@@ -4,6 +4,16 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [1.6.0] - 2026-10-23
+
+### Changed
+
+- Going back to a higher-priority account waits until a workspace's chats have been quiet for an
+  hour, the lifetime of Claude Code's prompt cache, so it never makes a busy chat resend its
+  context uncached. Switches forced by a limit, and manual ones, still happen at once.
+- An account's config dir starts its `.claude.json` from the current `~/.claude.json` whenever the
+  account is put to use, so MCP servers and project trust match.
+
 ## [1.5.0] - 2026-10-23
 
 ### Changed
@@ -173,6 +183,7 @@ All notable changes to this project are documented here. The format follows
 
 - First release: switch accounts by rewriting the live credential file.
 
+[1.6.0]: https://github.com/ChoqueCastroLD/paseo-seamless-claude-accounts/compare/v1.5.0...v1.6.0
 [1.5.0]: https://github.com/ChoqueCastroLD/paseo-seamless-claude-accounts/compare/v1.4.1...v1.5.0
 [1.4.1]: https://github.com/ChoqueCastroLD/paseo-seamless-claude-accounts/compare/v1.4.0...v1.4.1
 [1.4.0]: https://github.com/ChoqueCastroLD/paseo-seamless-claude-accounts/compare/v1.3.1...v1.4.0

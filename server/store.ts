@@ -522,6 +522,12 @@ export class Store {
 
       if (lane) await this.#prepareLane(seat);
       else await mkdir(seat.dir, { recursive: true });
+      // An account's dir keeps its own settings file; start it from the current one so MCP servers
+      // and project trust match ~/.claude.json, with only the account block differing.
+      if (lane) {
+        const current = await readJson(this.paths.liveSettings);
+        if (current !== null) await writeAtomic(seat.settings, `${JSON.stringify(current, null, 2)}\n`);
+      }
       const credentials = join(seat.dir, ".credentials.json");
       const previous = (await readJson(seat.settings))?.oauthAccount;
       const previousInside = (await readJson(join(seat.dir, ".claude.json")))?.oauthAccount;

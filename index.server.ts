@@ -201,7 +201,9 @@ export default function contribute(server: PluginServerContext) {
     return {};
   });
 
+  server.on("agent.turn_started", (event) => service.touch(event.agent.id));
   server.on("agent.turn_ended", async (event, { paseo }) => {
+    await service.touch(event.agent.id);
     await failover.onTurnEnded(event, paseo);
     adoptInBackground(paseo);
   });

@@ -21,6 +21,7 @@
 - [Installation](#installation)
 - [Usage](#usage)
 - [Priority and projects](#priority-and-projects)
+- [Cost of a switch](#cost-of-a-switch)
 - [Automatic switching](#automatic-switching)
 - [How it works](#how-it-works)
 - [Security](#security)
@@ -151,6 +152,27 @@ Every change applies to open chats without restarting them. Each workspace's cha
 their config dir, and switching the workspace's account repoints the link. Claude Code keeps its
 token in memory and checks the login file again at the start of each turn, so a chat uses the new
 account from its next message.
+
+## Cost of a switch
+
+Switching never touches history or configuration. Conversations, `settings.json`, skills, plugins
+and `CLAUDE.md` live in `~/.claude`, which every account's config dir links to; each account dir
+only keeps its own login and its own copy of `~/.claude.json`, refreshed from yours whenever the
+account is put to use.
+
+Nothing is re-read either: every message already sends the whole conversation. What a switch
+changes is Anthropic's prompt cache, which belongs to one account. The first message a chat sends
+on its new account processes its context uncached, once, against that account's allowance; after
+that it is cached again. No plugin can carry a cache between accounts.
+
+So the plugin only switches a busy chat when it must:
+
+| Switch                            | When it happens                                                                                                           |
+| --------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| An account hits its limit         | At once: the chat cannot continue otherwise.                                                                              |
+| **Use first**                     | At once: your choice.                                                                                                     |
+| Back to a higher-priority account | Once the workspace's chats have been quiet for an hour, when Claude Code's cache has expired and switching costs nothing. |
+| Before the limit (thresholds)     | At once, if you turn it on. Off by default for this reason.                                                               |
 
 ## Automatic switching
 

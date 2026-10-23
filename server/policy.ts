@@ -68,16 +68,18 @@ export function resolve(
   return pool.find((id) => byId.get(id)?.available) ?? (usable(current) ? current : (pool[0] ?? null));
 }
 
+// `sticky` can be decided per scope (null for the chats outside workspaces).
 export function plan(
   scopes: string[],
   candidates: Candidate[],
   rules: Rules,
   current: Placement,
-  sticky = false,
+  sticky: boolean | ((scope: string | null) => boolean) = false,
 ): Placement {
-  const next: Placement = { default: resolve(null, candidates, rules, current.default, sticky), scopes: {} };
+  const keep = (scope: string | null) => (typeof sticky === "function" ? sticky(scope) : sticky);
+  const next: Placement = { default: resolve(null, candidates, rules, current.default, keep(null)), scopes: {} };
   for (const scope of scopes) {
-    const id = resolve(scope, candidates, rules, current.scopes[scope] ?? null, sticky);
+    const id = resolve(scope, candidates, rules, current.scopes[scope] ?? null, keep(scope));
     if (id !== null) next.scopes[scope] = id;
   }
   return next;

@@ -31,7 +31,8 @@ const en = {
   reasonPriority: "back to priority",
   historyIn: "{entry} · {project}",
   returnToPriorityLabel: "Go back to higher-priority accounts",
-  returnToPriorityHint: "When an account earlier in the list frees up, switch back to it.",
+  returnToPriorityHint:
+    "When an account earlier in the list frees up, a workspace moves back to it once its chats have been quiet for an hour, when switching costs no tokens.",
   title: "Claude accounts",
   sidebar: "Claude accounts",
   commandOpen: "Switch Claude account",
@@ -118,7 +119,8 @@ const en = {
   autoContinueHint: "Sends the prompt below to each chat that stopped at the limit.",
   continuePromptLabel: "Resume prompt",
   preemptiveLabel: "Switch before the limit",
-  preemptiveHint: "Switches as soon as either window reaches its threshold, whichever comes first.",
+  preemptiveHint:
+    "Switches as soon as either window reaches its threshold, whichever comes first. A chat that is working sends its whole context again, uncached, to the new account.",
   sessionThresholdLabel: "5-hour window threshold",
   weekThresholdLabel: "7-day window threshold",
   thresholdOff: "Only at the limit",
@@ -179,7 +181,8 @@ const es: Record<Key, string> = {
   reasonPriority: "vuelta a la prioridad",
   historyIn: "{entry} · {project}",
   returnToPriorityLabel: "Volver a las cuentas de más prioridad",
-  returnToPriorityHint: "Cuando una cuenta que va antes en la lista se libera, vuelve a ella.",
+  returnToPriorityHint:
+    "Cuando una cuenta que va antes en la lista se libera, el workspace vuelve a ella cuando sus chats llevan una hora sin actividad, momento en que cambiar no gasta tokens.",
   title: "Cuentas de Claude",
   sidebar: "Cuentas de Claude",
   commandOpen: "Cambiar de cuenta de Claude",
@@ -266,7 +269,8 @@ const es: Record<Key, string> = {
   autoContinueHint: "Envía el mensaje de abajo a cada chat que se paró en el límite.",
   continuePromptLabel: "Mensaje para reanudar",
   preemptiveLabel: "Cambiar antes del límite",
-  preemptiveHint: "Cambia en cuanto cualquiera de las dos ventanas llega a su umbral, lo que pase primero.",
+  preemptiveHint:
+    "Cambia en cuanto cualquiera de las dos ventanas llega a su umbral, lo que pase primero. Un chat que está trabajando vuelve a enviar todo su contexto, sin caché, a la cuenta nueva.",
   sessionThresholdLabel: "Umbral de la ventana de 5 horas",
   weekThresholdLabel: "Umbral de la ventana de 7 días",
   thresholdOff: "Solo al llegar al límite",
