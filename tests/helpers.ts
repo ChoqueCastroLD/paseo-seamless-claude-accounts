@@ -12,9 +12,26 @@ export interface Fixture {
   cleanup(): Promise<void>;
 }
 
+// Stands in for Anthropic's profile endpoint: every token a test creates is registered with its
+// account, and unknown tokens get no answer, as when the endpoint cannot be reached.
+const owners = new Map<string, string>();
+
+export function registerToken(token: string, email: string): void {
+  owners.set(token, email);
+}
+
+export async function whoIs(token: string): Promise<{ key: string; email: string } | null> {
+  const email = owners.get(token);
+  return email === undefined ? null : { key: `uuid-${email}/org`, email };
+}
+
 export async function fixture(): Promise<Fixture> {
   const home = await mkdtemp(join(tmpdir(), "seamless-claude-"));
-  return { home, store: new Store(pathsFor(home)), cleanup: () => rm(home, { recursive: true, force: true }) };
+  return {
+    home,
+    store: new Store(pathsFor(home), { whoIs }),
+    cleanup: () => rm(home, { recursive: true, force: true }),
+  };
 }
 
 export interface LoginSpec {
@@ -26,6 +43,7 @@ export interface LoginSpec {
 }
 
 export function credentials(spec: LoginSpec): string {
+  registerToken(spec.token ?? `at-${spec.email}`, spec.email);
   return JSON.stringify({
     claudeAiOauth: {
       accessToken: spec.token ?? `at-${spec.email}`,

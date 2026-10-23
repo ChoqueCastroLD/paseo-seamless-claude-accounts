@@ -1,4 +1,4 @@
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import {
   chmod,
   copyFile,
@@ -173,6 +173,7 @@ export async function writeAtomic(path: string, body: string, mode = 0o600): Pro
   }
 }
 
+// A settings file that is not JSON is left as it is.
 async function writeAccountBlock(path: string, block: unknown): Promise<void> {
   const raw = await readText(path);
   let settings: Record<string, unknown> = {};
@@ -187,12 +188,39 @@ async function writeAccountBlock(path: string, block: unknown): Promise<void> {
   await writeAtomic(path, `${JSON.stringify(settings, null, 2)}\n`);
 }
 
+export function fingerprint(token: string): string {
+  return createHash("sha256").update(token).digest("hex");
+}
+
+// Who owns the default config dir's login: the profile whose token was last seen there. When the
+// token changes, Anthropic is asked whose it is; settings files can lag behind a login.
+interface Lineage {
+  owner: string;
+  refresh: string;
+}
+
+/** Whose a token is, from Anthropic: the account and organization key, and the address. */
+export interface WhoIs {
+  key: string;
+  email: string;
+}
+
+// The same account as Anthropic reports, also for blocks that lack the organization or the uuid.
+function sameAccount(identity: Identity | null, known: WhoIs): boolean {
+  if (identity === null) return false;
+  if (identity.key === known.key) return true;
+  if (identity.key.endsWith("/") && known.key.startsWith(identity.key)) return true;
+  return identity.key.startsWith("email:") && identity.email.toLowerCase() === known.email.toLowerCase();
+}
+
 export class Store {
   #queue: Promise<unknown> = Promise.resolve();
   readonly paths: StorePaths;
+  readonly #whoIs: (accessToken: string) => Promise<WhoIs | null>;
 
-  constructor(paths: StorePaths) {
+  constructor(paths: StorePaths, options: { whoIs?: (accessToken: string) => Promise<WhoIs | null> } = {}) {
     this.paths = paths;
+    this.#whoIs = options.whoIs ?? (async () => null);
   }
 
   get liveCredentials(): string {
@@ -308,6 +336,15 @@ export class Store {
     });
   }
 
+  // A login nobody can place is about to be replaced: keep a copy so it can never be lost.
+  async #keepUnknownLogin(seat: Seat): Promise<void> {
+    const raw = await readText(join(seat.dir, ".credentials.json"));
+    if (raw === null || parseLogin(raw) === null) return;
+    const trash = join(this.paths.data, "trash");
+    await mkdir(trash, { recursive: true, mode: 0o700 });
+    await writeAtomic(join(trash, `login-${safeName(seat.id)}-${Date.now()}.json`), raw);
+  }
+
   renameAccountDir(from: string, to: string): Promise<void> {
     return this.#exclusive(async () => {
       const source = this.accountSeat(from).dir;
@@ -322,37 +359,118 @@ export class Store {
     return this.#exclusive(() => this.#sync(seat, owner));
   }
 
+  get #lineageFile(): string {
+    return join(this.paths.data, "default-seat.json");
+  }
+
+  async #lineage(): Promise<Lineage | null> {
+    const value = await readJson(this.#lineageFile);
+    if (typeof value?.owner !== "string" || typeof value.refresh !== "string") return null;
+    return { owner: value.owner, refresh: value.refresh };
+  }
+
+  async #recordLineage(owner: string, login: Login): Promise<void> {
+    const refresh = fingerprint(login.refreshToken);
+    const current = await this.#lineage();
+    if (current?.owner === owner && current.refresh === refresh) return;
+    await this.#writeLineage({ owner, refresh });
+  }
+
+  async #writeLineage(lineage: Lineage): Promise<void> {
+    await mkdir(this.paths.data, { recursive: true, mode: 0o700 });
+    await writeAtomic(this.#lineageFile, `${JSON.stringify(lineage)}\n`);
+  }
+
+  /**
+   * The profile a seat's login belongs to. `undefined` means unknown, and then nothing is copied:
+   * a guess could write one account's tokens into another's profile.
+   */
+  async #ownerOf(
+    seat: Seat,
+    live: { login: Login; identity: Identity | null },
+    profiles: Profile[],
+  ): Promise<{ owner: Profile | undefined; key: string | null; email: string }> {
+    if (seat.id === DEFAULT_SEAT) {
+      const lineage = await this.#lineage();
+      const recorded = profiles.find((profile) => profile.id === lineage?.owner);
+      if (recorded !== undefined && lineage?.refresh === fingerprint(live.login.refreshToken)) {
+        return { owner: recorded, key: recorded.identity?.key ?? null, email: "" };
+      }
+    }
+    const byToken = profiles.find((profile) => profile.login?.refreshToken === live.login.refreshToken);
+    if (byToken !== undefined) return { owner: byToken, key: byToken.identity?.key ?? null, email: "" };
+    const expired = live.login.expiresAt !== null && live.login.expiresAt <= Date.now();
+    const known = expired ? null : await this.#whoIs(live.login.accessToken);
+    if (known !== null) {
+      const owner =
+        profiles.find((profile) => profile.identity?.key === known.key) ??
+        profiles.find((profile) => sameAccount(profile.identity, known));
+      return { owner, key: known.key, email: known.email };
+    }
+    // Anthropic cannot be asked (offline, or the token expired): the account block is the record.
+    // A switch never leaves it naming another account, so it can be trusted here, including for an
+    // account signed in by hand that has no profile yet.
+    if (live.identity === null) return { owner: undefined, key: null, email: "" };
+    const byIdentity = profiles.find((profile) => profile.identity?.key === live.identity?.key);
+    return { owner: byIdentity, key: live.identity.key, email: live.identity.email };
+  }
+
   async #sync(seat: Seat, ownerId?: string | null): Promise<Profile | null> {
     const live = await this.#read(seat.dir, seat.settings);
     const login = live.login;
     if (live.raw === null || login === null) return null;
     const profiles = await this.profiles();
-    const owner =
-      ownerId !== undefined
-        ? profiles.find((profile) => profile.id === ownerId)
-        : (profiles.find((profile) => live.identity !== null && profile.identity?.key === live.identity.key) ??
-          profiles.find((profile) => profile.login !== null && profile.login.refreshToken === login.refreshToken));
+    if (ownerId !== undefined) {
+      const owner = profiles.find((profile) => profile.id === ownerId);
+      return owner === undefined ? null : this.#copyForward(owner, live.raw, login);
+    }
 
+    const { owner, key, email } = await this.#ownerOf(seat, { login, identity: live.identity }, profiles);
     if (owner === undefined) {
-      if (ownerId !== undefined) return null;
-      const id = await this.#freeName(live.identity?.email.split("@")[0] ?? "", profiles);
+      // A login with no profile yet, signed in by hand: keep it, named after its account.
+      if (key === null) return null;
+      // The account block names who signed in; when the settings name someone else, build one from
+      // what Anthropic reported so the profile is recognized next time.
+      const [accountUuid = "", organizationUuid = ""] = key.split("/");
+      const block = live.identity?.key === key ? live.block : { accountUuid, organizationUuid, emailAddress: email };
+      const name = (live.identity?.key === key ? live.identity.email : email).split("@")[0] ?? "";
+      const id = await this.#freeName(name, profiles);
       const dir = profileDir(this.paths, id);
       await mkdir(dir, { mode: 0o700, recursive: true });
       await writeAtomic(join(dir, ".credentials.json"), live.raw);
-      if (live.block !== undefined) await writeAccountBlock(join(dir, ".claude.json"), live.block);
-      return { id, dir, login, identity: live.identity };
+      await writeAccountBlock(join(dir, ".claude.json"), block);
+      if (seat.id === DEFAULT_SEAT) await this.#recordLineage(id, login);
+      return { id, dir, login, identity: parseIdentity(block) };
     }
 
-    // Only copy forward: a profile signed in again may hold a newer login than the live one.
+    const synced = await this.#copyForward(owner, live.raw, login);
+    if (owner.identity === null && live.block !== undefined && live.identity !== null) {
+      // Only an identity Anthropic confirms for this token is copied into the profile.
+      const expired = login.expiresAt !== null && login.expiresAt <= Date.now();
+      const known = expired ? null : ((await this.#whoIs(login.accessToken))?.key ?? null);
+      if (known === live.identity.key) await writeAccountBlock(join(owner.dir, ".claude.json"), live.block);
+    }
+    if (seat.id === DEFAULT_SEAT) {
+      await this.#recordLineage(owner.id, login);
+      // Settings can name a previous account; show the one actually signed in. Only a different
+      // account counts, not a block that merely carries more or fewer fields for the same one.
+      const account = (identity: Identity | null) => identity?.key.split("/")[0] ?? null;
+      if (owner.identity !== null && account(live.identity) !== account(owner.identity)) {
+        const block = (await readJson(join(owner.dir, ".claude.json")))?.oauthAccount;
+        if (block !== undefined) await writeAccountBlock(seat.settings, block);
+      }
+    }
+    return synced;
+  }
+
+  // Only copy forward: a profile signed in again may hold a newer login than the live one.
+  async #copyForward(owner: Profile, raw: string, login: Login): Promise<Profile> {
     const stored = owner.login;
     const newer = stored === null || (login.expiresAt ?? 0) >= (stored.expiresAt ?? 0);
     if (newer && (stored?.accessToken !== login.accessToken || stored?.refreshToken !== login.refreshToken)) {
-      await writeAtomic(join(owner.dir, ".credentials.json"), live.raw);
+      await writeAtomic(join(owner.dir, ".credentials.json"), raw);
     }
-    if (live.block !== undefined && owner.identity === null && ownerId === undefined) {
-      await writeAccountBlock(join(owner.dir, ".claude.json"), live.block);
-    }
-    return { ...owner, login: newer ? login : stored, identity: owner.identity ?? live.identity };
+    return { ...owner, login: newer ? login : stored };
   }
 
   async #prepareLane(seat: Seat): Promise<void> {
@@ -393,6 +511,7 @@ export class Store {
     return this.#exclusive(async () => {
       const lane = seat.id !== DEFAULT_SEAT;
       const from = await this.#sync(seat, lane ? (owner ?? null) : undefined);
+      if (!lane && from === null) await this.#keepUnknownLogin(seat);
       const profile = (await this.profiles()).find((candidate) => candidate.id === id);
       if (profile === undefined) throw new StoreError("unknown-account", `no profile named ${id}`);
       if (from?.id === profile.id) return { profile, changed: false, from };
@@ -404,21 +523,28 @@ export class Store {
       if (lane) await this.#prepareLane(seat);
       else await mkdir(seat.dir, { recursive: true });
       const credentials = join(seat.dir, ".credentials.json");
+      const previous = (await readJson(seat.settings))?.oauthAccount;
+      const previousInside = (await readJson(join(seat.dir, ".claude.json")))?.oauthAccount;
       await writeAtomic(credentials, raw);
       // Without this Claude Code keeps showing the previous account's address.
       const block = (await readJson(join(profile.dir, ".claude.json")))?.oauthAccount;
+      const inside = join(seat.dir, ".claude.json");
+      const insideIsOwn = inside !== seat.settings && (await lstat(inside).catch(() => null))?.isFile() === true;
       if (block !== undefined) {
         await writeAccountBlock(seat.settings, block);
-        const inside = join(seat.dir, ".claude.json");
-        if (inside !== seat.settings && (await lstat(inside).catch(() => null))?.isFile()) {
-          await writeAccountBlock(inside, block);
-        }
+        if (insideIsOwn) await writeAccountBlock(inside, block);
       }
-
       if ((await readText(credentials)) !== raw) {
-        // Claude Code renewed the old token mid-switch and its write won.
+        // Claude Code renewed the old token mid-switch and its write won: the old account stays,
+        // so its account block goes back too and keeps naming the login actually there.
+        if (block !== undefined) {
+          if (previous !== undefined) await writeAccountBlock(seat.settings, previous);
+          if (insideIsOwn && previousInside !== undefined) await writeAccountBlock(inside, previousInside);
+        }
         throw new StoreError("invalid-login", "the live login changed while switching; try again");
       }
+      const login = parseLogin(raw);
+      if (!lane && login !== null) await this.#recordLineage(id, login);
       return { profile, changed: true, from };
     });
   }
@@ -433,6 +559,8 @@ export class Store {
       const target = profileDir(this.paths, next);
       if (await exists(target)) throw new StoreError("name-taken", `${target} already exists`);
       await rename(profile.dir, target);
+      const lineage = await this.#lineage();
+      if (lineage?.owner === id) await this.#writeLineage({ owner: next, refresh: lineage.refresh });
       return next;
     });
   }
@@ -451,13 +579,16 @@ export class Store {
     });
   }
 
-  prepare(name: string): Promise<string> {
+  /** A profile directory for a login in progress; `created` says whether it is new. */
+  prepare(name: string): Promise<{ dir: string; created: boolean }> {
     return this.#exclusive(async () => {
       const id = name.trim().toLowerCase();
       if (!PROFILE_NAME.test(id)) throw new StoreError("invalid-name", `invalid profile name: ${name}`);
       const dir = profileDir(this.paths, id);
+      // A directory left empty by an earlier attempt counts as new; one holding anything does not.
+      const created = (await readdir(dir).catch(() => [] as string[])).length === 0;
       await mkdir(dir, { recursive: true, mode: 0o700 });
-      return dir;
+      return { dir, created };
     });
   }
 

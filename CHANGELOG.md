@@ -4,6 +4,35 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [1.5.0] - 2026-10-23
+
+### Changed
+
+- Whose a login is comes from the refresh token last seen in that config dir, else from
+  Anthropic's `/api/oauth/profile`, else from the account block, and never from a guess. When none
+  can tell, nothing is copied; a login the plugin cannot place is saved to its trash before being
+  replaced.
+- A switch that loses a race with a token renewal puts the previous account block back.
+- Every operation that reads or changes where accounts are runs in one queue, so none sees another
+  half done. A limit failover decides, marks and moves in a single step.
+- **Use first** reports when nothing can use the account right now.
+- Usage readings from before a window reset count as empty again.
+
+### Fixed
+
+- An idle account that reset kept counting as used up, so it was never returned to.
+- The session hook no longer stops a chat from opening: on an error or after 25 seconds it opens
+  on the default login and is adopted later. Workspaces whose project is not known yet are adopted
+  once it is.
+- Background and archived agents, and pages past the first, are listed. Background agents are not
+  reopened. Failed reopens are retried up to three times.
+- A failed or cancelled sign-in never deletes a directory that existed before it, and closing the
+  dialog while `claude` is starting cancels that sign-in.
+- A sign-in needed on the first account now shows its button.
+- Editing a workspace or an account's projects no longer moves other workspaces back to
+  higher-priority accounts when that setting is off.
+- The reset time shown when every account is used up only counts accounts that chat may use.
+
 ## [1.4.1] - 2026-10-23
 
 ### Fixed
@@ -144,6 +173,7 @@ All notable changes to this project are documented here. The format follows
 
 - First release: switch accounts by rewriting the live credential file.
 
+[1.5.0]: https://github.com/ChoqueCastroLD/paseo-seamless-claude-accounts/compare/v1.4.1...v1.5.0
 [1.4.1]: https://github.com/ChoqueCastroLD/paseo-seamless-claude-accounts/compare/v1.4.0...v1.4.1
 [1.4.0]: https://github.com/ChoqueCastroLD/paseo-seamless-claude-accounts/compare/v1.3.1...v1.4.0
 [1.3.1]: https://github.com/ChoqueCastroLD/paseo-seamless-claude-accounts/compare/v1.3.0...v1.3.1

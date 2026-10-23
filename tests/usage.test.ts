@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import { readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
-import { fullUntil, parseUsage, UsageReader } from "../server/usage.ts";
-import { peak } from "../shared/usage.ts";
+import { fullUntil, IdentityReader, parseUsage, UsageReader } from "../server/usage.ts";
+import { peak, settle } from "../shared/usage.ts";
 import { fixture, usageFetch, type Fixture } from "./helpers.ts";
 
 const login = (token: string, expiresAt: number | null = null) => ({
@@ -43,6 +43,19 @@ describe("parseUsage", () => {
     assert.equal(fullUntil(usage), "2030-01-01T05:00:00.000Z");
     assert.equal(fullUntil(parseUsage({ five_hour: { utilization: 50 } }, 0)), null);
     assert.equal(peak(null), null);
+  });
+});
+
+describe("settle", () => {
+  it("empties windows that have reset since the reading", () => {
+    const usage = {
+      fiveHour: { percent: 100, resetsAt: "2026-01-01T05:00:00.000Z" },
+      week: { percent: 40, resetsAt: "2026-01-07T00:00:00.000Z" },
+      fetchedAt: "2026-01-01T00:00:00.000Z",
+    };
+    const later = settle(usage, Date.parse("2026-01-02T00:00:00Z"));
+    assert.deepEqual([later.fiveHour?.percent, later.fiveHour?.resetsAt, later.week?.percent], [0, null, 40]);
+    assert.equal(settle(null, 0), null);
   });
 });
 
@@ -111,5 +124,32 @@ describe("UsageReader", () => {
     assert.ok(!(await readFile(file, "utf8")).includes("tok"), "the cache must not hold tokens");
     const restarted = reader(usageFetch({}).fetch);
     assert.equal((await restarted.known("k"))?.week?.percent, 44);
+  });
+});
+
+describe("IdentityReader", () => {
+  it("names the account and organization of a token, caches it, and admits failure", async () => {
+    let calls = 0;
+    const answer = (status: number, body: unknown) =>
+      (async () => {
+        calls += 1;
+        return new Response(JSON.stringify(body), { status });
+      }) as typeof fetch;
+    const ok = new IdentityReader({
+      version: Promise.resolve("2.1.0"),
+      fetch: answer(200, { account: { uuid: "u1", email: "a@x.io" }, organization: { uuid: "o1" } }),
+    });
+    assert.deepEqual(await ok.whoIs("token", 0), { key: "u1/o1", email: "a@x.io" });
+    assert.deepEqual(await ok.whoIs("token", 1_000), { key: "u1/o1", email: "a@x.io" });
+    assert.equal(calls, 1);
+    const refused = new IdentityReader({ version: Promise.resolve("2.1.0"), fetch: answer(401, {}) });
+    assert.equal(await refused.whoIs("token"), null);
+    const offline = new IdentityReader({
+      version: Promise.resolve("2.1.0"),
+      fetch: (async () => {
+        throw new Error("offline");
+      }) as typeof fetch,
+    });
+    assert.equal(await offline.whoIs("token"), null);
   });
 });

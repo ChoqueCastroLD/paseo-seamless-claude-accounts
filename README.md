@@ -216,14 +216,19 @@ started with its own `CLAUDE_CONFIG_DIR` is left alone.
 ## Security
 
 - Tokens never leave the daemon machine. The app receives addresses, plan names and
-  percentages, never credentials. The only network request is the usage endpoint at
-  `api.anthropic.com`, with each account's own token.
+  percentages, never credentials. The plugin talks only to `api.anthropic.com`, with each
+  account's own token: `/api/oauth/usage` for the meters, and `/api/oauth/profile` to learn whose a
+  login is when the token in a config dir has changed.
+- One account's tokens are never written into another account's profile. Whose a login is comes
+  from the refresh token last seen there, else from Anthropic, else from the account block in the
+  settings; when none can tell, nothing is copied. A login the plugin cannot place is copied to
+  `~/.local/share/seamless-claude-accounts/trash` before anything replaces it.
 - Every file written is owner-only: credentials and settings `0600`, new profiles `0700`. A
   replaced file never ends up with a looser mode than it had.
 - Writes are atomic and serialized. Profile names are validated on the daemon before they touch
   the file system.
 - **Remove** moves a profile to `~/.local/share/seamless-claude-accounts/trash`. Nothing is
-  deleted.
+  deleted. A failed or cancelled sign-in only removes a profile directory it created itself.
 - The plugin never redeems refresh tokens itself. Claude Code renews them; the plugin only copies
   the result.
 

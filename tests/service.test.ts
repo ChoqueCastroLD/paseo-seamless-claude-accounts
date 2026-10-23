@@ -65,7 +65,7 @@ describe("AccountService.use", () => {
     await addProfile(f.home, "work", { email: "w@x.io" });
     await setLive(f.home, { email: "h@x.io" });
     const { service: s } = service(f);
-    assert.deepEqual(await s.use("work"), { ok: true, email: "w@x.io" });
+    assert.deepEqual(await s.use("work"), { ok: true, email: "w@x.io", placed: true });
     const { accounts, history } = await s.list();
     assert.equal(accounts.find((account) => account.active)?.id, "work");
     assert.equal(accounts[0]?.id, "work");
@@ -99,15 +99,28 @@ describe("AccountService.failover", () => {
       "at-f@x.io": { five: 100, week: 1 },
     });
     await s.rules.update((rules) => void (rules.order = ["m", "full", "a", "b"]));
-    assert.deepEqual(await s.failover(null, false), { from: "m", to: "a", nextReset: null });
+    const { from, to, nextReset } = await s.failover(null, false);
+    assert.deepEqual({ from, to, nextReset }, { from: "m", to: "a", nextReset: null });
+  });
+
+  it("changes nothing when a switch made a moment ago already answers the chat", async () => {
+    await addProfile(f.home, "a", { email: "a@x.io" });
+    await setLive(f.home, { email: "m@x.io" });
+    const { service: s } = service(f, { "at-m@x.io": { five: 100, week: 10 } });
+    const result = await s.failover(null, false, {
+      settled: (current) => ({ from: "x", to: current, nextReset: null }),
+    });
+    assert.deepEqual([result.from, result.to], ["x", "m"]);
+    assert.equal(result.before, result.after);
+    assert.equal((await s.list()).accounts.find((account) => account.active)?.id, "m");
   });
 
   it("reports when an account frees up if none is left", async () => {
     await addProfile(f.home, "a", { email: "a@x.io" });
     await setLive(f.home, { email: "m@x.io" });
     const { service: s } = service(f, { "at-m@x.io": { five: 100, week: 50 }, "at-a@x.io": { five: 100, week: 50 } });
-    const result = await s.failover(null, false);
-    assert.deepEqual(result, { from: "m", to: null, nextReset: "2030-01-01T05:00:00.000Z" });
+    const { from, to, nextReset } = await s.failover(null, false);
+    assert.deepEqual({ from, to, nextReset }, { from: "m", to: null, nextReset: "2030-01-01T05:00:00.000Z" });
   });
 });
 
@@ -159,6 +172,18 @@ describe("AccountService login", () => {
     assert.ok(started.ok);
     await s.finishLogin(started.session, "wrong");
     assert.ok((await readdir(f.home)).includes(".claude-work"));
+  });
+
+  it("never deletes a directory that existed before a failed sign-in", async () => {
+    const { mkdir: makeDir, writeFile: write } = await import("node:fs/promises");
+    await setLive(f.home, { email: "m@x.io" });
+    await makeDir(join(f.home, ".claude-backup"));
+    await write(join(f.home, ".claude-backup", "notes.txt"), "keep me");
+    const { service: s } = service(f);
+    const started = await s.startLogin("backup");
+    assert.ok(started.ok);
+    await s.finishLogin(started.session, "wrong");
+    assert.ok((await readdir(join(f.home, ".claude-backup"))).includes("notes.txt"));
   });
 
   it("will not sign in the live profile again", async () => {

@@ -87,9 +87,15 @@ export function LoginDialog({ profile, onClose, onDone, s, text }: LoginDialogPr
   const [step, setStep] = useState<LoginStep>(profile === null ? { kind: "name" } : { kind: "starting" });
   const session = useRef<string | null>(null);
   const autoStarted = useRef(false);
+  const closed = useRef(false);
 
   async function request(target: string) {
     const result = await start({ name: target }).catch(transportFailure);
+    if (closed.current) {
+      // Closed while claude was starting: stop that login so its directory is cleaned up.
+      if (result.ok) void cancel({ session: result.session });
+      return;
+    }
     if (!result.ok) {
       setError(text.error(result.error, result.detail));
       setStep({ kind: "name" });
@@ -129,6 +135,7 @@ export function LoginDialog({ profile, onClose, onDone, s, text }: LoginDialogPr
   }
 
   function close() {
+    closed.current = true;
     if (session.current !== null) void cancel({ session: session.current });
     session.current = null;
     onClose();

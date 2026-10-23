@@ -3,7 +3,7 @@ import { lstat, mkdir, readFile, readlink, stat, writeFile } from "node:fs/promi
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
 import { parseLogin } from "../server/store.ts";
-import { addProfile, fixture, service, setLive, type Fixture } from "./helpers.ts";
+import { addProfile, fixture, registerToken, service, setLive, type Fixture } from "./helpers.ts";
 
 describe("accounts per workspace", () => {
   let f: Fixture;
@@ -147,7 +147,7 @@ describe("accounts per workspace", () => {
   it("puts a used account first and moves every workspace allowed to use it", async () => {
     const s = await setup();
     await s.laneFor("ws_acme");
-    assert.deepEqual(await s.use("spare"), { ok: true, email: "s@x.io" });
+    assert.deepEqual(await s.use("spare"), { ok: true, email: "s@x.io", placed: true });
     const { accounts, history } = await s.list();
     assert.deepEqual(
       accounts.map((account) => [account.id, account.priority, account.active]),
@@ -202,6 +202,7 @@ describe("accounts per workspace", () => {
     const s = await setup();
     const legacy = join(data(), "lanes", "prj_old");
     await mkdir(legacy, { recursive: true });
+    registerToken("lane-renewed", "w@x.io");
     const renewed = JSON.stringify({
       claudeAiOauth: { accessToken: "lane-renewed", refreshToken: "r9", expiresAt: Date.now() + 9_000_000 },
     });
@@ -259,6 +260,7 @@ describe("session opening", () => {
     assert.equal(opened?.env.KEEP, "1");
     assert.equal((await s.rules.read()).projectOf.ws_a, "prj_a");
     assert.equal(await s.openSession(request({}, "claude", null), null), undefined);
+    assert.equal(await s.openSession(request({}, "claude", "ws_unknown"), null), undefined);
     assert.equal(await s.openSession(request({}, "codex"), "prj_a"), undefined);
     assert.equal(await s.openSession(request({ CLAUDE_CONFIG_DIR: "/custom" }), "prj_a"), undefined);
   });
@@ -308,6 +310,7 @@ describe("chats opened without a workspace link", () => {
     });
     const picked = await s.adoptable([
       agent("old"),
+      agent("unmapped", { workspaceId: "ws_unknown" }),
       agent("linked"),
       agent("busy", { status: "running" }),
       agent("asking", { pendingPermissions: [{}] }),
@@ -316,7 +319,78 @@ describe("chats opened without a workspace link", () => {
       agent("archived", { archivedAt: "2026-01-01" }),
     ]);
     assert.deepEqual(picked, ["old"]);
-    await s.forgetAgentsExcept(new Set(["old"]));
+    await s.forgetAgents(await s.openedAgents(), new Set(["old"]));
     assert.deepEqual((await s.rules.read()).opened, {});
+  });
+});
+
+describe("review regressions", () => {
+  let f: Fixture;
+  beforeEach(async () => (f = await fixture()));
+  afterEach(() => f.cleanup());
+
+  async function setup(usage: Parameters<typeof service>[1] = {}) {
+    await addProfile(f.home, "home", { email: "h@x.io" });
+    await addProfile(f.home, "spare", { email: "s@x.io" });
+    await addProfile(f.home, "work", { email: "w@x.io" });
+    await setLive(f.home, { email: "h@x.io" });
+    const { service: s } = service(f, usage);
+    await s.rules.update((rules) => void (rules.order = ["home", "spare", "work"]));
+    await s.know(["prj_a", "prj_b"], { ws_a: "prj_a", ws_b: "prj_b" });
+    return s;
+  }
+
+  it("reports when an account put first cannot be used anywhere yet", async () => {
+    const s = await setup();
+    await s.assignProjects("work", ["prj_a"], { everywhere: false, known: ["prj_a", "prj_b"] });
+    const result = await s.use("work");
+    assert.deepEqual(result, { ok: true, email: "w@x.io", placed: false });
+  });
+
+  it("does not reshuffle other workspaces when one is edited and going back to priority is off", async () => {
+    const s = await setup();
+    s.setReturnToPriority(false);
+    await s.laneFor("ws_a");
+    await s.laneFor("ws_b");
+    await s.assignWorkspace("ws_b", ["spare"]);
+    await s.assignWorkspace("ws_a", ["spare", "home"]);
+    await s.assignWorkspace("ws_b", null);
+    const placement = await s.placement();
+    assert.equal(placement.scopes.ws_b, "spare");
+  });
+
+  it("only reports the reset of accounts the chat may use", async () => {
+    const s = await setup({
+      "at-h@x.io": { five: 100, week: 10 },
+      "at-s@x.io": { five: 100, week: 10 },
+      "at-w@x.io": { five: 100, week: 10 },
+    });
+    await s.laneFor("ws_a");
+    await s.assignWorkspace("ws_a", ["home", "spare"]);
+    const result = await s.failover("ws_a", false);
+    assert.equal(result.to, null);
+    assert.equal(result.nextReset, "2030-01-01T05:00:00.000Z");
+  });
+
+  it("keeps the tokens of an account someone signs into by hand in the terminal", async () => {
+    const { readFile: read, writeFile: write } = await import("node:fs/promises");
+    const s = await setup();
+    await s.list();
+    registerToken("at-manual", "s@x.io");
+    await write(
+      join(f.home, ".claude", ".credentials.json"),
+      JSON.stringify({
+        claudeAiOauth: { accessToken: "at-manual", refreshToken: "rt-manual", expiresAt: Date.now() + 9e6 },
+      }),
+    );
+    await write(
+      join(f.home, ".claude.json"),
+      JSON.stringify({ oauthAccount: { emailAddress: "s@x.io", accountUuid: "uuid-s@x.io", organizationUuid: "org" } }),
+    );
+    await s.list();
+    const spare = parseLogin(await read(join(f.home, ".claude-spare", ".credentials.json"), "utf8"));
+    const home = parseLogin(await read(join(f.home, ".claude-home", ".credentials.json"), "utf8"));
+    assert.equal(spare?.accessToken, "at-manual");
+    assert.equal(home?.accessToken, "at-h@x.io");
   });
 });

@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { mkdir, readFile } from "node:fs/promises";
 import { dirname } from "node:path";
-import { writeAtomic, type Login } from "./store.ts";
+import { fingerprint, writeAtomic, type Login, type WhoIs } from "./store.ts";
 
 const ENDPOINT = "https://api.anthropic.com/api/oauth/usage";
 const TIMEOUT_MS = 8_000;
@@ -151,6 +151,72 @@ export class UsageReader {
     } catch {
       entry.failedAt = now;
       return entry.usage;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+}
+
+const PROFILE_ENDPOINT = "https://api.anthropic.com/api/oauth/profile";
+const PROFILE_FRESH_MS = 5 * 60_000;
+const FAILURE_FRESH_MS = 60_000;
+const PROFILE_TIMEOUT_MS = 5_000;
+
+/**
+ * Asks Anthropic which account and organization a token belongs to. The reliable answer when the
+ * login in a config dir has changed. Failures are remembered for a minute, so an outage does not
+ * stall every sync on the network timeout.
+ */
+export class IdentityReader {
+  readonly #fetch: typeof fetch;
+  readonly #version: Promise<string>;
+  #cache = new Map<string, { at: number; answer: WhoIs | null }>();
+
+  constructor(options: { version: Promise<string>; fetch?: typeof fetch }) {
+    this.#version = options.version;
+    this.#fetch = options.fetch ?? fetch;
+  }
+
+  /** Whose the token is, or null when that cannot be known right now. */
+  async whoIs(accessToken: string, now = Date.now()): Promise<WhoIs | null> {
+    const id = fingerprint(accessToken);
+    for (const [entry, value] of this.#cache) if (now - value.at >= PROFILE_FRESH_MS) this.#cache.delete(entry);
+    const cached = this.#cache.get(id);
+    if (cached !== undefined && now - cached.at < (cached.answer === null ? FAILURE_FRESH_MS : PROFILE_FRESH_MS)) {
+      return cached.answer;
+    }
+    const answer = await this.#ask(accessToken);
+    this.#cache.set(id, { at: now, answer });
+    return answer;
+  }
+
+  async #ask(accessToken: string): Promise<WhoIs | null> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), PROFILE_TIMEOUT_MS);
+    try {
+      const response = await this.#fetch(PROFILE_ENDPOINT, {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          Accept: "application/json",
+          "anthropic-beta": "oauth-2025-04-20",
+          "User-Agent": `claude-code/${await this.#version}`,
+        },
+        signal: controller.signal,
+      });
+      if (!response.ok) return null;
+      const body = (await response.json()) as {
+        account?: { uuid?: unknown; email?: unknown };
+        organization?: { uuid?: unknown };
+      };
+      const user = body.account?.uuid;
+      const organization = body.organization?.uuid;
+      if (typeof user !== "string" || typeof organization !== "string") return null;
+      return {
+        key: `${user}/${organization}`,
+        email: typeof body.account?.email === "string" ? body.account.email : "",
+      };
+    } catch {
+      return null;
     } finally {
       clearTimeout(timer);
     }

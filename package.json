@@ -1,6 +1,6 @@
 {
   "name": "paseo-seamless-claude-accounts",
-  "version": "1.4.1",
+  "version": "1.5.0",
   "description": "Switch Claude Code accounts in Paseo without restarting a single chat, with automatic failover when an account hits its limit",
   "keywords": [
     "paseo",

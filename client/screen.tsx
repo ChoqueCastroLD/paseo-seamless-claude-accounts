@@ -143,7 +143,9 @@ export function AccountsScreen({
   const switching = useMutation({
     mutationFn: (account: Account) => switchTo({ id: account.id }),
     onSuccess: async (result) => {
-      if (result.ok) toast.show(text.t("nowUsing", { email: result.email }), { variant: "success" });
+      if (result.ok && result.placed) toast.show(text.t("nowUsing", { email: result.email }), { variant: "success" });
+      else if (result.ok)
+        toast.show(text.t("firstNotUsed", { email: result.email }), { variant: "warning", durationMs: 5_000 });
       else toast.error(text.error(result.error, result.detail));
       await client.invalidateQueries({ queryKey: ACCOUNTS_QUERY });
     },

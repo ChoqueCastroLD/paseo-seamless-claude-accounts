@@ -53,6 +53,6 @@ the link it gives and paste the code back.
 Tokens stay on the daemon machine; the app only receives addresses, plan names and percentages.
 The plugin reads and writes `~/.claude/.credentials.json`, `~/.claude.json`, the `~/.claude-*`
 profiles and its own directory `~/.local/share/seamless-claude-accounts`, all with owner-only
-permissions. Usage is read from `api.anthropic.com`
-with each account's own token. Removed profiles are moved to
+permissions. Usage, and whose a login is when its token changes, are read from
+`api.anthropic.com` with each account's own token. Removed profiles are moved to
 `~/.local/share/seamless-claude-accounts/trash`, never deleted.

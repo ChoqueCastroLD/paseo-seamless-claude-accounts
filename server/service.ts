@@ -1,14 +1,15 @@
 import { basename, dirname, join } from "node:path";
 import type { Account, ErrorCode, HistoryEntry, SwitchReason } from "../shared/contracts.ts";
 import { slug } from "../shared/names.ts";
-import { peak } from "../shared/usage.ts";
+import { peak, settle } from "../shared/usage.ts";
 import { LoginError, LoginFlow } from "./login.ts";
 import {
+  allowEverywhere,
+  allows,
   plan,
   prioritized,
   projectsOf,
   promote,
-  allowEverywhere,
   setProjects,
   without,
   type Candidate,
@@ -60,6 +61,25 @@ export interface AgentSummary {
   status: string;
   archivedAt?: string | null;
   pendingPermissions?: readonly unknown[] | null;
+}
+
+export interface Failed {
+  from: string | null;
+  to: string | null;
+  nextReset: string | null;
+}
+
+interface ApplyOptions {
+  below?: Thresholds;
+  sticky?: boolean;
+  include?: string;
+}
+
+interface Listing {
+  accounts: Account[];
+  target: string;
+  history: HistoryEntry[];
+  placement: Placement;
 }
 
 export class AccountService {
@@ -132,6 +152,11 @@ export class AccountService {
     target: string;
     history: HistoryEntry[];
   }> {
+    const listing = await this.#exclusive(() => this.#listNow(options));
+    return { accounts: listing.accounts, target: listing.target, history: listing.history };
+  }
+
+  async #listNow(options: { refresh?: boolean; now?: number } = {}): Promise<Listing> {
     const now = options.now ?? Date.now();
     const { placement, profiles } = await this.#current();
     let rules = await this.rules.read();
@@ -154,7 +179,8 @@ export class AccountService {
       profiles.map(async (profile): Promise<Account> => {
         const login = profile.login;
         const key = keyOf(profile);
-        const usage = login === null ? null : await this.usage.read(key, login, { now, force: options.refresh });
+        const reading = login === null ? null : await this.usage.read(key, login, { now, force: options.refresh });
+        const usage = settle(reading, now);
         const until = this.#exhausted.get(key) ?? null;
         const active = profile.id === placement.default;
         const scopes = usedBy.get(profile.id) ?? [];
@@ -184,7 +210,7 @@ export class AccountService {
       }),
     );
     accounts.sort((a, b) => a.priority - b.priority);
-    return { accounts, target: this.store.liveCredentials, history: [...this.#history] };
+    return { accounts, target: this.store.liveCredentials, history: [...this.#history], placement };
   }
 
   #candidates(accounts: Account[], below?: Thresholds): Candidate[] {
@@ -199,46 +225,51 @@ export class AccountService {
     }));
   }
 
-  // Projects leaving `~/.claude` move first and those arriving move last, so no chat ever reads a
+  #apply(reason: SwitchReason, options: ApplyOptions = {}) {
+    return this.#exclusive(() => this.#applyNow(reason, options));
+  }
+
+  // Workspaces leaving `~/.claude` move first and those arriving move last, so no chat ever reads a
   // config dir whose login is mid-change.
-  #apply(reason: SwitchReason, options: { below?: Thresholds; sticky?: boolean; include?: string } = {}) {
-    return this.#exclusive(async () => {
-      const listing = await this.list();
-      const { placement: current } = await this.#current();
-      const rules = await this.rules.read();
-      const scopes = [...new Set([...Object.keys(current.scopes), ...(options.include ? [options.include] : [])])];
-      const next = plan(scopes, this.#candidates(listing.accounts, options.below), rules, current, options.sticky);
-      const oldDefault = current.default;
-      const newDefault = next.default ?? oldDefault;
-      const live = new Set(Object.values(current.scopes).filter((id) => id !== oldDefault));
+  async #applyNow(reason: SwitchReason, options: ApplyOptions): Promise<Placement> {
+    const listing = await this.#listNow();
+    const current = listing.placement;
+    const rules = await this.rules.read();
+    const scopes = [...new Set([...Object.keys(current.scopes), ...(options.include ? [options.include] : [])])];
+    const next = plan(scopes, this.#candidates(listing.accounts, options.below), rules, current, options.sticky);
+    const oldDefault = current.default;
+    const newDefault = next.default ?? oldDefault;
+    const live = new Set(Object.values(current.scopes).filter((id) => id !== oldDefault));
+    const installed = new Set<string>();
 
-      for (const [scope, id] of Object.entries(next.scopes)) {
-        if (id === newDefault) continue;
-        if (!live.has(id)) {
-          await this.store.install(id, this.store.accountSeat(id), null);
-          live.add(id);
-        }
-        await this.store.point(scope, this.store.accountSeat(id).dir);
+    for (const [scope, id] of Object.entries(next.scopes)) {
+      if (id === newDefault) continue;
+      if (!live.has(id) && !installed.has(id)) {
+        await this.store.install(id, this.store.accountSeat(id), null);
+        installed.add(id);
       }
-      if (newDefault !== null && newDefault !== oldDefault) await this.store.install(newDefault);
-      await this.store.linkDefaultSettings();
-      for (const [scope, id] of Object.entries(next.scopes)) {
-        if (id === newDefault) await this.store.point(scope, this.store.paths.live);
-      }
+      await this.store.point(scope, this.store.accountSeat(id).dir);
+    }
+    if (newDefault !== null && newDefault !== oldDefault) await this.store.install(newDefault);
+    await this.store.linkDefaultSettings();
+    for (const [scope, id] of Object.entries(next.scopes)) {
+      if (id === newDefault) await this.store.point(scope, this.store.paths.live);
+    }
 
-      // A chat may have renewed its token in the dir its account just left; carry the newest login
-      // to the dir the account uses now.
-      const used = new Set(Object.values(next.scopes).filter((id) => id !== newDefault));
-      for (const id of live) {
-        if (used.has(id)) continue;
-        await this.store.sync(this.store.accountSeat(id), id);
-        if (id === newDefault) await this.store.adopt(this.store.defaultSeat, id);
-      }
+    // A chat may have renewed its token in the dir its account just left; carry the newest login
+    // to the dir the account uses now.
+    const used = new Set(Object.values(next.scopes).filter((id) => id !== newDefault));
+    for (const id of live) {
+      if (used.has(id)) continue;
+      await this.store.sync(this.store.accountSeat(id), id);
+      if (id === newDefault) await this.store.adopt(this.store.defaultSeat, id);
+    }
+    // The old default's profile was only brought up to date by installing the new default.
+    for (const id of installed) await this.store.adopt(this.store.accountSeat(id), id);
 
-      const after: Placement = { default: newDefault, scopes: next.scopes };
-      await this.#record(reason, current, after);
-      return after;
-    });
+    const after: Placement = { default: newDefault, scopes: next.scopes };
+    await this.#record(reason, current, after);
+    return after;
   }
 
   async #record(reason: SwitchReason, before: Placement, after: Placement): Promise<void> {
@@ -277,8 +308,17 @@ export class AccountService {
     if (entry !== undefined) entry.resumed += count;
   }
 
-  // "Use" puts the account first, so it serves every project it is allowed in.
-  async use(id: string): Promise<{ ok: true; email: string } | Failure> {
+  // Sticky placement keeps workspaces on an account while it lasts; it follows "go back to
+  // higher-priority accounts" being off. Editing who may use what never reshuffles other workspaces.
+  #sticky = false;
+
+  setReturnToPriority(on: boolean): void {
+    this.#sticky = !on;
+  }
+
+  // "Use" puts the account first, so it serves every workspace it is allowed in. `placed` says
+  // whether anything uses it right now: it may be used up, need a sign-in, or be limited elsewhere.
+  async use(id: string): Promise<{ ok: true; email: string; placed: boolean } | Failure> {
     try {
       const listing = await this.list();
       const account = listing.accounts.find((candidate) => candidate.id === id);
@@ -286,8 +326,9 @@ export class AccountService {
       if (account.status === "no-login") throw new StoreError("no-login", `${id} has no stored login`);
       const ids = listing.accounts.map((candidate) => candidate.id);
       await this.rules.update((rules) => void (rules.order = promote(rules.order, ids, id)));
-      await this.#apply("manual");
-      return { ok: true, email: account.email };
+      const after = await this.#apply("manual");
+      const placed = after.default === id || Object.values(after.scopes).includes(id);
+      return { ok: true, email: account.email, placed };
     } catch (error) {
       return failure(error);
     }
@@ -332,7 +373,7 @@ export class AccountService {
       await this.rules.update((rules) =>
         options.everywhere ? allowEverywhere(rules, id) : setProjects(rules, id, projects, options.known),
       );
-      await this.#apply("manual");
+      await this.#apply("manual", { sticky: this.#sticky });
       return { ok: true };
     } catch (error) {
       return failure(error);
@@ -346,53 +387,59 @@ export class AccountService {
         const rest = without(rules.workspaces, workspace);
         rules.workspaces = accounts === null || accounts.length === 0 ? rest : { ...rest, [workspace]: [...accounts] };
       });
-      await this.#apply("manual", { include: workspace });
+      await this.#apply("manual", { include: workspace, sticky: this.#sticky });
       return { ok: true };
     } catch (error) {
       return failure(error);
     }
   }
 
-  async rename(id: string, name: string): Promise<{ ok: true; id: string } | Failure> {
-    try {
-      const { placement } = await this.#current();
-      const next = await this.store.rename(id, name);
-      if (next !== id) {
-        await this.rules.update((rules) => renameIn(rules, id, next));
-        await this.store.renameAccountDir(id, next);
-        for (const [scope, owner] of Object.entries(placement.scopes)) {
-          if (owner === id && id !== placement.default) {
-            await this.store.point(scope, this.store.accountSeat(next).dir);
+  rename(id: string, name: string): Promise<{ ok: true; id: string } | Failure> {
+    return this.#exclusive(async () => {
+      try {
+        const { placement } = await this.#current();
+        const next = await this.store.rename(id, name);
+        if (next !== id) {
+          await this.rules.update((rules) => renameIn(rules, id, next));
+          await this.store.renameAccountDir(id, next);
+          for (const [scope, owner] of Object.entries(placement.scopes)) {
+            if (owner === id && id !== placement.default) {
+              await this.store.point(scope, this.store.accountSeat(next).dir);
+            }
           }
         }
+        return { ok: true as const, id: next };
+      } catch (error) {
+        return failure(error);
       }
-      return { ok: true, id: next };
-    } catch (error) {
-      return failure(error);
-    }
+    });
   }
 
-  async remove(id: string): Promise<{ ok: true; trash: string } | Failure> {
-    try {
-      const { placement } = await this.#current();
-      if (Object.values(placement.scopes).includes(id)) {
-        throw new StoreError("active-account", `${id} is in use`);
+  remove(id: string): Promise<{ ok: true; trash: string } | Failure> {
+    return this.#exclusive(async () => {
+      try {
+        const { placement } = await this.#current();
+        if (placement.default === id || Object.values(placement.scopes).includes(id)) {
+          throw new StoreError("active-account", `${id} is in use`);
+        }
+        const trash = await this.store.remove(id);
+        await this.rules.update((rules) => forget(rules, id));
+        return { ok: true as const, trash };
+      } catch (error) {
+        return failure(error);
       }
-      const trash = await this.store.remove(id);
-      await this.rules.update((rules) => forget(rules, id));
-      return { ok: true, trash };
-    } catch (error) {
-      return failure(error);
-    }
+    });
   }
 
   async laneFor(workspace: string | null): Promise<string | null> {
     if (workspace === null) return null;
-    const { placement } = await this.#current();
-    if (placement.default === null) return null;
-    if (placement.scopes[workspace] !== undefined) return this.store.pointer(workspace);
-    const next = await this.#apply("manual", { include: workspace, sticky: true });
-    return next.scopes[workspace] === undefined ? null : this.store.pointer(workspace);
+    return this.#exclusive(async () => {
+      const { placement } = await this.#current();
+      if (placement.default === null) return null;
+      if (placement.scopes[workspace] !== undefined) return this.store.pointer(workspace);
+      const next = await this.#applyNow("manual", { include: workspace, sticky: true });
+      return next.scopes[workspace] === undefined ? null : this.store.pointer(workspace);
+    });
   }
 
   async openSession<
@@ -400,6 +447,10 @@ export class AccountService {
   >(request: Request, project: string | null): Promise<Request | undefined> {
     if (request.provider !== "claude" || request.env.CLAUDE_CONFIG_DIR !== undefined) return undefined;
     if (request.workspaceId !== null && project !== null) await this.know([], { [request.workspaceId]: project });
+    // Without its project the workspace's rules are unknown; it is adopted once they are known.
+    if (request.workspaceId !== null && (await this.rules.read()).projectOf[request.workspaceId] === undefined) {
+      return undefined;
+    }
     const lane = await this.laneFor(request.workspaceId);
     if (lane === null || request.workspaceId === null) return undefined;
     const scope = request.workspaceId;
@@ -412,13 +463,13 @@ export class AccountService {
   async scopeOfAgent(agentId: string, workspace: string | null, project: string | null): Promise<string | null> {
     const known = (await this.rules.read()).opened[agentId];
     if (known !== undefined) return known;
-    const { placement } = await this.#current();
+    const placement = await this.placement();
     if (project !== null && placement.scopes[project] !== undefined) return project;
     return workspace !== null && placement.scopes[workspace] !== undefined ? workspace : null;
   }
 
-  async placement(): Promise<Placement> {
-    return (await this.#current()).placement;
+  placement(): Promise<Placement> {
+    return this.#exclusive(async () => (await this.#current()).placement);
   }
 
   /**
@@ -426,25 +477,27 @@ export class AccountService {
    * through a 1.3 project link. Reopening them once lets every later switch reach them.
    */
   async adoptable(agents: AgentSummary[]): Promise<string[]> {
-    const { opened } = await this.rules.read();
+    const { opened, projectOf } = await this.rules.read();
     return agents
-      .filter((agent) => agent.provider === "claude" && agent.workspaceId != null && agent.archivedAt == null)
+      .filter((agent) => agent.provider === "claude" && agent.archivedAt == null)
+      .filter((agent) => agent.workspaceId != null && projectOf[agent.workspaceId] !== undefined)
       .filter((agent) => agent.status === "idle" && (agent.pendingPermissions?.length ?? 0) === 0)
       .filter((agent) => opened[agent.id] === undefined)
       .map((agent) => agent.id);
   }
 
-  async forgetAgentsExcept(existing: Set<string>): Promise<void> {
-    const { opened } = await this.rules.read();
-    if (Object.keys(opened).every((id) => existing.has(id))) return;
-    await this.rules.update((rules) => {
-      rules.opened = Object.fromEntries(Object.entries(rules.opened).filter(([id]) => existing.has(id)));
-    });
+  /** The agents recorded as opened through a link, to compare against the daemon's full list. */
+  async openedAgents(): Promise<string[]> {
+    return Object.keys((await this.rules.read()).opened);
   }
 
-  async accountFor(scope: string | null): Promise<string | null> {
-    const { placement } = await this.#current();
-    return (scope === null ? undefined : placement.scopes[scope]) ?? placement.default;
+  /** Drops records of `candidates` (read before listing the daemon's agents) that no longer exist. */
+  async forgetAgents(candidates: string[], existing: Set<string>): Promise<void> {
+    const gone = new Set(candidates.filter((id) => !existing.has(id)));
+    if (gone.size === 0) return;
+    await this.rules.update((rules) => {
+      rules.opened = Object.fromEntries(Object.entries(rules.opened).filter(([id]) => !gone.has(id)));
+    });
   }
 
   async markExhausted(id: string, now = Date.now()): Promise<void> {
@@ -453,25 +506,42 @@ export class AccountService {
     const key = keyOf(profile);
     const until =
       profile.login === null ? null : fullUntil(await this.usage.read(key, profile.login, { now, force: true }));
-    this.#exhausted.set(key, until === null ? now + DEFAULT_EXHAUSTION_MS : Date.parse(until));
+    // A reading from an earlier window can name a reset already past; then the reset is unknown.
+    const reset = until === null ? Number.NaN : Date.parse(until);
+    this.#exhausted.set(key, reset > now ? reset : now + DEFAULT_EXHAUSTION_MS);
   }
 
-  async failover(
+  /**
+   * Moves every workspace off the account a chat ran out on, as one step so no other switch can
+   * land in between. `settled` sees the account the chat is on now and may answer for a switch
+   * made a moment ago, in which case nothing changes.
+   */
+  failover(
     scope: string | null,
     sticky: boolean,
-    now = Date.now(),
-  ): Promise<{ from: string | null; to: string | null; nextReset: string | null }> {
-    const from = await this.accountFor(scope);
-    if (from !== null) await this.markExhausted(from, now);
-    await this.#apply("limit", { sticky });
-    const to = await this.accountFor(scope);
-    if (to !== null && to !== from) return { from, to, nextReset: null };
-    const { accounts } = await this.list({ now });
-    const resets = accounts
-      .flatMap((account) => [account.exhaustedUntil, fullUntil(account.usage)])
-      .filter((value): value is string => value !== null && Date.parse(value) > now)
-      .sort();
-    return { from, to: null, nextReset: resets[0] ?? null };
+    options: { now?: number; settled?: (current: string | null) => Failed | null } = {},
+  ): Promise<Failed & { before: Placement; after: Placement }> {
+    const now = options.now ?? Date.now();
+    return this.#exclusive(async () => {
+      const on = (placement: Placement) => (scope === null ? undefined : placement.scopes[scope]) ?? placement.default;
+      const before = (await this.#current()).placement;
+      const from = on(before);
+      const earlier = options.settled?.(from) ?? null;
+      if (earlier !== null) return { ...earlier, before, after: before };
+      if (from !== null) await this.markExhausted(from, now);
+      const after = await this.#applyNow("limit", { sticky });
+      const to = on(after);
+      if (to !== null && to !== from) return { from, to, nextReset: null, before, after };
+      const rules = await this.rules.read();
+      const { accounts } = await this.#listNow({ now });
+      const permitted = accounts.filter((account) => allows(rules, account.id, scope));
+      const resets = (permitted.length > 0 ? permitted : accounts)
+        .filter((account) => account.status === "ready")
+        .flatMap((account) => [account.exhaustedUntil, fullUntil(account.usage)])
+        .filter((value): value is string => value !== null && Date.parse(value) > now)
+        .sort();
+      return { from, to: null, nextReset: resets[0] ?? null, before, after };
+    });
   }
 
   async rebalance(options: { below?: Thresholds; returnToPriority: boolean }): Promise<boolean> {
@@ -487,14 +557,13 @@ export class AccountService {
     const id = slug(name);
     if (id === null) return failure(new StoreError("invalid-name", `invalid profile name: ${name}`));
     try {
-      const { placement } = await this.#current();
+      const placement = await this.placement();
       // Two logins of one account would invalidate each other's refresh token.
       if (placement.default === id || Object.values(placement.scopes).includes(id)) {
         throw new StoreError("active-account", `${id} is the account in use`);
       }
-      const existing = (await this.store.profiles()).find((profile) => profile.id === id);
-      const dir = await this.store.prepare(id);
-      if (existing === undefined) this.#fresh.add(dir);
+      const { dir, created } = await this.store.prepare(id);
+      if (created) this.#fresh.add(dir);
       try {
         const { session, url } = await this.login.start(dir);
         this.#logins.set(session, dir);

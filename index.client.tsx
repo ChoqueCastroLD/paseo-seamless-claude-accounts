@@ -38,6 +38,7 @@ async function switchTo(rpc: Rpc, query: string): Promise<void> {
   if (target === undefined) throw new Error(text.t("slashUnknown", { name: query.trim() }));
   const result = await rpc(switchAccount, { id: target.id });
   if (!result.ok) throw new Error(text.error(result.error, result.detail));
+  if (!result.placed) throw new Error(text.t("firstNotUsed", { email: result.email || target.id }));
 }
 
 export default function contribute(client: PluginClientContext) {

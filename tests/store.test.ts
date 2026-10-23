@@ -4,7 +4,16 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
 import { parseIdentity, parseLogin, pathsFor, StoreError, writeAtomic } from "../server/store.ts";
 import { slug } from "../shared/names.ts";
-import { accountBlock, addProfile, credentials, fixture, readJson, setLive, type Fixture } from "./helpers.ts";
+import {
+  accountBlock,
+  addProfile,
+  credentials,
+  fixture,
+  readJson,
+  registerToken,
+  setLive,
+  type Fixture,
+} from "./helpers.ts";
 
 describe("parsing", () => {
   it("reads the OAuth login and ignores everything else", () => {
@@ -117,8 +126,13 @@ describe("Store", () => {
   });
 
   it("copies a token Claude Code renewed back into the profile", async () => {
-    await addProfile(f.home, "work", { email: "w@x.io", token: "old", refresh: "old-r", expiresAt: 1_000 });
-    await setLive(f.home, { email: "w@x.io", token: "new", refresh: "new-r", expiresAt: 2_000 });
+    await addProfile(f.home, "work", {
+      email: "w@x.io",
+      token: "old",
+      refresh: "old-r",
+      expiresAt: Date.now() + 1_000,
+    });
+    await setLive(f.home, { email: "w@x.io", token: "new", refresh: "new-r", expiresAt: Date.now() + 2_000 });
     await f.store.sync();
     const stored = parseLogin(await readFile(join(f.home, ".claude-work", ".credentials.json"), "utf8"));
     assert.equal(stored?.refreshToken, "new-r");
@@ -245,5 +259,177 @@ describe("Store", () => {
     await f.store.discard(outside);
     await f.store.discard(join(f.home, ".claude"));
     assert.ok((await stat(outside)).isDirectory());
+  });
+});
+
+describe("Store ownership of the default login", () => {
+  let f: Fixture;
+  beforeEach(async () => (f = await fixture()));
+  afterEach(() => f.cleanup());
+
+  const later = () => Date.now() + 9_000_000;
+
+  it("sends a renewed token to its real account even when the settings name another", async () => {
+    await addProfile(f.home, "home", { email: "h@x.io" });
+    await addProfile(f.home, "work", { email: "w@x.io" });
+    await setLive(f.home, { email: "h@x.io" });
+    await f.store.sync();
+    registerToken("at-h-renewed", "h@x.io");
+    await writeFile(
+      join(f.home, ".claude", ".credentials.json"),
+      credentials({ email: "h@x.io", token: "at-h-renewed", refresh: "rt-h-2", expiresAt: later() }),
+    );
+    await writeFile(
+      join(f.home, ".claude.json"),
+      JSON.stringify({ theme: "dark", oauthAccount: accountBlock("w@x.io") }),
+    );
+    const owner = await f.store.sync();
+    assert.equal(owner?.id, "home");
+    const home = parseLogin(await readFile(join(f.home, ".claude-home", ".credentials.json"), "utf8"));
+    const work = parseLogin(await readFile(join(f.home, ".claude-work", ".credentials.json"), "utf8"));
+    assert.equal(home?.accessToken, "at-h-renewed");
+    assert.equal(work?.accessToken, "at-w@x.io");
+    const settings = await readJson(join(f.home, ".claude.json"));
+    assert.equal(settings.oauthAccount.emailAddress, "h@x.io");
+    assert.equal(settings.theme, "dark");
+  });
+
+  it("copies nothing when neither Anthropic nor the settings can say whose a new token is", async () => {
+    await addProfile(f.home, "home", { email: "h@x.io" });
+    await setLive(f.home, { email: "h@x.io" });
+    await f.store.sync();
+    await writeFile(
+      join(f.home, ".claude", ".credentials.json"),
+      JSON.stringify({ claudeAiOauth: { accessToken: "mystery", refreshToken: "rt-mystery", expiresAt: later() } }),
+    );
+    await writeFile(join(f.home, ".claude.json"), JSON.stringify({ theme: "dark" }));
+    assert.equal(await f.store.sync(), null);
+    const home = parseLogin(await readFile(join(f.home, ".claude-home", ".credentials.json"), "utf8"));
+    assert.equal(home?.accessToken, "at-h@x.io");
+    assert.deepEqual(
+      (await f.store.profiles()).map((profile) => profile.id),
+      ["home"],
+    );
+  });
+
+  it("saves a login rotated while offline and since expired, going by the account block", async () => {
+    await addProfile(f.home, "home", { email: "h@x.io", expiresAt: 1_000 });
+    await addProfile(f.home, "work", { email: "w@x.io" });
+    await setLive(f.home, { email: "h@x.io", expiresAt: 1_000 });
+    await f.store.sync();
+    await writeFile(
+      join(f.home, ".claude", ".credentials.json"),
+      JSON.stringify({ claudeAiOauth: { accessToken: "unreachable", refreshToken: "rt-h-9", expiresAt: 2_000 } }),
+    );
+    assert.equal((await f.store.sync())?.id, "home");
+    const home = parseLogin(await readFile(join(f.home, ".claude-home", ".credentials.json"), "utf8"));
+    assert.equal(home?.refreshToken, "rt-h-9");
+  });
+
+  it("keeps an account signed in by hand while offline as a new profile", async () => {
+    await addProfile(f.home, "home", { email: "h@x.io" });
+    await setLive(f.home, { email: "h@x.io" });
+    await f.store.sync();
+    await writeFile(
+      join(f.home, ".claude", ".credentials.json"),
+      JSON.stringify({ claudeAiOauth: { accessToken: "new-offline", refreshToken: "rt-new", expiresAt: later() } }),
+    );
+    await writeFile(join(f.home, ".claude.json"), JSON.stringify({ oauthAccount: accountBlock("new.person@x.io") }));
+    assert.equal((await f.store.sync())?.id, "new-person");
+    const saved = parseLogin(await readFile(join(f.home, ".claude-new-person", ".credentials.json"), "utf8"));
+    assert.equal(saved?.accessToken, "new-offline");
+  });
+
+  it("recognizes a profile whose block lacks the organization", async () => {
+    await mkdir(join(f.home, ".claude-old"), { recursive: true });
+    await writeFile(join(f.home, ".claude-old", ".credentials.json"), credentials({ email: "o@x.io" }));
+    await writeFile(
+      join(f.home, ".claude-old", ".claude.json"),
+      JSON.stringify({ oauthAccount: { emailAddress: "o@x.io", accountUuid: "uuid-o@x.io" } }),
+    );
+    registerToken("at-o-renewed", "o@x.io");
+    await mkdir(join(f.home, ".claude"), { recursive: true });
+    await writeFile(
+      join(f.home, ".claude", ".credentials.json"),
+      credentials({ email: "o@x.io", token: "at-o-renewed", refresh: "rt-o-2", expiresAt: later() }),
+    );
+    assert.equal((await f.store.sync())?.id, "old");
+    assert.deepEqual(
+      (await f.store.profiles()).map((profile) => profile.id),
+      ["old"],
+    );
+  });
+
+  it("keeps a copy of a login nobody can place before replacing it", async () => {
+    await addProfile(f.home, "work", { email: "w@x.io" });
+    await mkdir(join(f.home, ".claude"), { recursive: true });
+    await writeFile(
+      join(f.home, ".claude", ".credentials.json"),
+      JSON.stringify({ claudeAiOauth: { accessToken: "orphan", refreshToken: "rt-orphan", expiresAt: later() } }),
+    );
+    await f.store.install("work");
+    const trash = join(f.home, ".local", "share", "seamless-claude-accounts", "trash");
+    const copies = await readdir(trash);
+    assert.equal(copies.length, 1);
+    assert.equal(parseLogin(await readFile(join(trash, copies[0]!), "utf8"))?.accessToken, "orphan");
+  });
+
+  it("prefers the profile that matches the account exactly", async () => {
+    await mkdir(join(f.home, ".claude-a"), { recursive: true });
+    await writeFile(join(f.home, ".claude-a", ".credentials.json"), credentials({ email: "x@x.io", token: "a-tok" }));
+    await writeFile(
+      join(f.home, ".claude-a", ".claude.json"),
+      JSON.stringify({ oauthAccount: { emailAddress: "x@x.io", accountUuid: "uuid-b@x.io" } }),
+    );
+    await addProfile(f.home, "b", { email: "b@x.io" });
+    registerToken("b-renewed", "b@x.io");
+    await mkdir(join(f.home, ".claude"), { recursive: true });
+    await writeFile(
+      join(f.home, ".claude", ".credentials.json"),
+      credentials({ email: "b@x.io", token: "b-renewed", refresh: "rt-b-2", expiresAt: later() }),
+    );
+    assert.equal((await f.store.sync())?.id, "b");
+  });
+
+  it("names a hand sign-in after Anthropic's answer so later renewals find it", async () => {
+    await addProfile(f.home, "home", { email: "h@x.io" });
+    await setLive(f.home, { email: "h@x.io" });
+    await f.store.sync();
+    registerToken("bob-1", "bob@x.io");
+    await writeFile(
+      join(f.home, ".claude", ".credentials.json"),
+      credentials({ email: "bob@x.io", token: "bob-1", refresh: "rt-bob-1", expiresAt: later() }),
+    );
+    assert.equal((await f.store.sync())?.id, "bob");
+    registerToken("bob-2", "bob@x.io");
+    await writeFile(
+      join(f.home, ".claude", ".credentials.json"),
+      credentials({ email: "bob@x.io", token: "bob-2", refresh: "rt-bob-2", expiresAt: later() + 1 }),
+    );
+    await writeFile(join(f.home, ".claude-bob", "unrelated"), "");
+    assert.equal((await f.store.sync())?.id, "bob");
+    assert.deepEqual(
+      (await f.store.profiles()).map((profile) => profile.id),
+      ["bob", "home"],
+    );
+  });
+
+  it("leaves the settings alone when they name the same account with other fields", async () => {
+    await addProfile(f.home, "home", { email: "h@x.io" });
+    await setLive(f.home, { email: "h@x.io" });
+    const richer = { ...accountBlock("h@x.io"), organizationName: "Home", seatTier: "max" };
+    await writeFile(join(f.home, ".claude.json"), JSON.stringify({ oauthAccount: richer }));
+    await f.store.sync();
+    assert.equal((await readJson(join(f.home, ".claude.json"))).oauthAccount.seatTier, "max");
+  });
+
+  it("keeps knowing the owner after a rename", async () => {
+    await addProfile(f.home, "home", { email: "h@x.io" });
+    await addProfile(f.home, "work", { email: "w@x.io" });
+    await setLive(f.home, { email: "h@x.io" });
+    await f.store.install("work");
+    await f.store.rename("work", "office");
+    await writeFile(join(f.home, ".claude.json"), JSON.stringify({ oauthAccount: accountBlock("h@x.io") }));
+    assert.equal((await f.store.sync())?.id, "office");
   });
 });

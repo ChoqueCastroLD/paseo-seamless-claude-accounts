@@ -152,29 +152,30 @@ export function AccountCard({ account, count, nameOf, busy, now, s, text, action
     ...(live ? [] : [{ icon: "Trash2", label: text.t("remove"), danger: true, run: () => actions.onRemove(account) }]),
   ];
 
-  const primary =
-    account.active || account.priority === 1 ? null : account.status === "ready" ? (
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel={`${text.t("useFirst")} ${title}`}
-        accessibilityState={{ disabled: busy, busy }}
-        disabled={busy}
-        onPress={() => actions.onUse(account)}
-        style={[s.primary, s.compact ? s.fill : null, busy ? s.disabled : null]}
-      >
-        <Icon name="ArrowLeftRight" size={16} color={s.colors.accentForeground} />
-        <Text style={s.primaryText}>{busy ? text.t("switching") : text.t("useFirst")}</Text>
-      </Pressable>
-    ) : (
-      <Pressable
-        accessibilityRole="button"
-        onPress={() => actions.onSignIn(account)}
-        style={[s.primary, s.compact ? s.fill : null]}
-      >
-        <Icon name="LogIn" size={16} color={s.colors.accentForeground} />
-        <Text style={s.primaryText}>{text.t("signIn")}</Text>
-      </Pressable>
-    );
+  const signIn = (
+    <Pressable
+      accessibilityRole="button"
+      onPress={() => actions.onSignIn(account)}
+      style={[s.primary, s.compact ? s.fill : null]}
+    >
+      <Icon name="LogIn" size={16} color={s.colors.accentForeground} />
+      <Text style={s.primaryText}>{text.t("signIn")}</Text>
+    </Pressable>
+  );
+  const useFirst = (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={`${text.t("useFirst")} ${title}`}
+      accessibilityState={{ disabled: busy, busy }}
+      disabled={busy}
+      onPress={() => actions.onUse(account)}
+      style={[s.primary, s.compact ? s.fill : null, busy ? s.disabled : null]}
+    >
+      <Icon name="ArrowLeftRight" size={16} color={s.colors.accentForeground} />
+      <Text style={s.primaryText}>{busy ? text.t("switching") : text.t("useFirst")}</Text>
+    </Pressable>
+  );
+  const primary = account.status !== "ready" ? signIn : account.active || account.priority === 1 ? null : useFirst;
 
   const more = (
     <Pressable

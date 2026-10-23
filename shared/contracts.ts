@@ -88,7 +88,11 @@ export const listAccounts = defineRpc({
 export const switchAccount = defineRpc({
   name: "seamless-claude.use",
   input: z.object({ id: z.string() }),
-  output: z.discriminatedUnion("ok", [z.object({ ok: z.literal(true), email: z.string() }), failure]),
+  output: z.discriminatedUnion("ok", [
+    // `placed` is false when nothing can use the account right now: used up, signed out or limited.
+    z.object({ ok: z.literal(true), email: z.string(), placed: z.boolean() }),
+    failure,
+  ]),
 });
 
 export const renameAccount = defineRpc({

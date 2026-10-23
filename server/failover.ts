@@ -101,20 +101,20 @@ export class Failover {
   ): Promise<{ from: string | null; to: string | null; nextReset: string | null }> {
     const run = this.#queue.then(async () => {
       const now = Date.now();
-      const before = await this.#service.placement();
       const key = scope ?? "";
-      const current = (scope === null ? before.default : (before.scopes[scope] ?? before.default)) ?? null;
-      const last = this.#moved.get(key);
-      if (last !== undefined && now - last.at < SETTLE_MS && (last.to === current || last.from === current)) {
-        return { from: last.from, to: last.to, nextReset: last.nextReset };
-      }
-      const result = await this.#service.failover(scope, sticky, now);
-      const after = await this.#service.placement();
-      const note = (key: string, from: string | null, to: string | null) => {
-        if (from !== to) this.#moved.set(key, { at: now, from, to, nextReset: null });
+      const settled = (current: string | null) => {
+        const last = this.#moved.get(key);
+        return last !== undefined && now - last.at < SETTLE_MS && (last.to === current || last.from === current)
+          ? { from: last.from, to: last.to, nextReset: last.nextReset }
+          : null;
+      };
+      const { before, after, ...result } = await this.#service.failover(scope, sticky, { now, settled });
+      if (before === after) return result;
+      const note = (moved: string, from: string | null, to: string | null) => {
+        if (from !== to) this.#moved.set(moved, { at: now, from, to, nextReset: null });
       };
       note("", before.default, after.default);
-      for (const [key, id] of Object.entries(after.scopes)) note(key, before.scopes[key] ?? before.default, id);
+      for (const [moved, id] of Object.entries(after.scopes)) note(moved, before.scopes[moved] ?? before.default, id);
       this.#moved.set(key, { at: now, ...result });
       return result;
     });
