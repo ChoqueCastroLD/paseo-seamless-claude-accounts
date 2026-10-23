@@ -19,6 +19,7 @@
 
 - [Why](#why)
 - [Features](#features)
+- [Screenshots](#screenshots)
 - [Requirements](#requirements)
 - [Installation](#installation)
 - [Usage](#usage)
@@ -70,6 +71,32 @@ you and tell the chat to carry on.
 - **English and Spanish**, following the device language or a setting.
 - **Desktop, web and mobile.** Built from React Native primitives and the host theme.
 
+## Screenshots
+
+All accounts and projects shown are sample data.
+
+<table>
+  <tr>
+    <td width="50%"><img src="assets/workspace.png" alt="The Claude accounts button in a workspace header, choosing which accounts that workspace may use"></td>
+    <td width="50%"><img src="assets/projects.png" alt="Limiting an account to selected projects"></td>
+  </tr>
+  <tr>
+    <td align="center"><sub>Pick the accounts of one workspace from its header</sub></td>
+    <td align="center"><sub>Limit an account to some projects</sub></td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="assets/actions.png" alt="The actions of an account: move in the priority order, where to use it, rename"></td>
+    <td width="50%">
+      <img src="assets/phone-accounts.png" alt="The accounts screen on a phone" width="49%">
+      <img src="assets/phone-sidebar.png" alt="The sidebar on a phone, showing the active account and its 5-hour usage" width="49%">
+    </td>
+  </tr>
+  <tr>
+    <td align="center"><sub>Reorder, restrict or rename an account</sub></td>
+    <td align="center"><sub>The same screen and sidebar row on a phone</sub></td>
+  </tr>
+</table>
+
 ## Requirements
 
 |             |                                                                                                                 |
@@ -103,13 +130,6 @@ paseo plugin ls
 ```
 
 ## Usage
-
-<table>
-  <tr>
-    <td width="60%"><img src="assets/workspace.png" alt="The Claude accounts button in a workspace header, choosing the accounts of that workspace"></td>
-    <td width="40%"><img src="assets/phone-accounts.png" alt="The accounts screen on a phone"></td>
-  </tr>
-</table>
 
 Open **Claude accounts** from the sidebar, from `⌘K` / `Ctrl+K`, or type `/account` in the
 composer.
