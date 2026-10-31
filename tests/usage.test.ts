@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
-import { readFile, stat } from "node:fs/promises";
-import { join } from "node:path";
+import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
 import { fullUntil, IdentityReader, parseUsage, UsageReader } from "../server/usage.ts";
-import { peak, settle } from "../shared/usage.ts";
+import { noSessionLimit, peak, settle } from "../shared/usage.ts";
 import { fixture, usageFetch, type Fixture } from "./helpers.ts";
 
 const login = (token: string, expiresAt: number | null = null) => ({
@@ -22,6 +22,7 @@ describe("parseUsage", () => {
     assert.deepEqual(usage, {
       fiveHour: { percent: 100, resetsAt: "2030-01-01T05:00:00.000Z" },
       week: { percent: 12.5, resetsAt: null },
+      models: [],
       fetchedAt: "1970-01-01T00:00:00.000Z",
     });
   });
@@ -29,6 +30,96 @@ describe("parseUsage", () => {
   it("returns null when neither window is present", () => {
     assert.equal(parseUsage({ five_hour: null }, 0), null);
     assert.equal(parseUsage("nope", 0), null);
+  });
+
+  it("reads an account without a 5-hour window, as Ultra plans answer", () => {
+    const usage = parseUsage(
+      {
+        five_hour: null,
+        seven_day: { utilization: 51.0, resets_at: "2030-01-07T03:00:00.227651+00:00" },
+        limits: [{ kind: "weekly_all", group: "weekly", percent: 51 }],
+      },
+      0,
+    );
+    assert.deepEqual(usage?.fiveHour, null);
+    assert.deepEqual(usage?.week, { percent: 51, resetsAt: "2030-01-07T03:00:00.227Z" });
+    assert.equal(noSessionLimit(usage), true);
+    assert.equal(peak(usage), 51);
+    assert.equal(noSessionLimit(null), false);
+    assert.equal(
+      noSessionLimit(parseUsage({ five_hour: { utilization: 0 }, seven_day: { utilization: 1 } }, 0)),
+      false,
+    );
+  });
+
+  it("reads the weekly allowance of each model from the limits rows", () => {
+    const usage = parseUsage(
+      {
+        five_hour: { utilization: 0, resets_at: "2030-01-01T05:00:00Z" },
+        seven_day: { utilization: 75, resets_at: "2030-01-07T00:00:00Z" },
+        seven_day_opus: { utilization: 20, resets_at: "2030-01-07T00:00:00Z" },
+        limits: [
+          { kind: "session", group: "session", percent: 0, resets_at: "2030-01-01T05:00:00Z", scope: null },
+          { kind: "weekly_all", group: "weekly", percent: 75, resets_at: "2030-01-07T00:00:00Z", scope: null },
+          {
+            kind: "weekly_scoped",
+            group: "weekly",
+            percent: 31,
+            resets_at: "2030-01-07T00:00:00Z",
+            scope: { model: { id: null, display_name: "Fable" }, surface: null },
+          },
+          { kind: "weekly_scoped", percent: 5, scope: { model: null, surface: { name: "cowork" } } },
+          "noise",
+        ],
+      },
+      0,
+    );
+    assert.deepEqual(usage?.models, [
+      { model: "Fable", percent: 31, resetsAt: "2030-01-07T00:00:00.000Z" },
+      { model: "Opus", percent: 20, resetsAt: "2030-01-07T00:00:00.000Z" },
+    ]);
+    // A full model window does not make the whole account full, but it is when a chat on it frees up.
+    const fableOut = parseUsage(
+      {
+        seven_day: { utilization: 40 },
+        limits: [
+          {
+            kind: "weekly_scoped",
+            percent: 100,
+            resets_at: "2030-01-06T00:00:00Z",
+            scope: { model: { display_name: "Fable" } },
+          },
+        ],
+      },
+      0,
+    );
+    assert.equal(peak(fableOut), 40);
+    assert.equal(fullUntil(fableOut), "2030-01-06T00:00:00.000Z");
+  });
+
+  it("falls back to the limits rows when the named windows are not sent", () => {
+    const usage = parseUsage(
+      {
+        limits: [
+          { kind: "session", percent: 12, resets_at: "2030-01-01T05:00:00Z", scope: null },
+          { kind: "weekly_all", percent: 34, resets_at: null, scope: null },
+        ],
+      },
+      0,
+    );
+    assert.deepEqual(
+      [usage?.fiveHour, usage?.week],
+      [
+        { percent: 12, resetsAt: "2030-01-01T05:00:00.000Z" },
+        { percent: 34, resetsAt: null },
+      ],
+    );
+    // An explicit null is a plan without that window, whatever else the rows say.
+    assert.equal(
+      parseUsage({ five_hour: null, seven_day: { utilization: 1 }, limits: [{ kind: "session", percent: 9 }] }, 0)
+        ?.fiveHour,
+      null,
+    );
   });
 
   it("finds the binding window and when a full one frees up", () => {
@@ -55,6 +146,11 @@ describe("settle", () => {
     };
     const later = settle(usage, Date.parse("2026-01-02T00:00:00Z"));
     assert.deepEqual([later.fiveHour?.percent, later.fiveHour?.resetsAt, later.week?.percent], [0, null, 40]);
+    const models = settle(
+      { ...usage, models: [{ model: "Fable", percent: 100, resetsAt: "2026-01-01T12:00:00.000Z" }] },
+      Date.parse("2026-01-02T00:00:00Z"),
+    ).models;
+    assert.deepEqual(models, [{ model: "Fable", percent: 0, resetsAt: null }]);
     assert.equal(settle(null, 0), null);
   });
 });
@@ -124,6 +220,16 @@ describe("UsageReader", () => {
     assert.ok(!(await readFile(file, "utf8")).includes("tok"), "the cache must not hold tokens");
     const restarted = reader(usageFetch({}).fetch);
     assert.equal((await restarted.known("k"))?.week?.percent, 44);
+  });
+
+  it("reads a cache written before model windows existed", async () => {
+    const file = join(f.home, "cache", "usage.json");
+    await mkdir(dirname(file), { recursive: true });
+    await writeFile(
+      file,
+      JSON.stringify({ k: { fiveHour: null, week: { percent: 5, resetsAt: null }, fetchedAt: "x" } }),
+    );
+    assert.deepEqual((await reader(usageFetch({}).fetch).known("k"))?.models, []);
   });
 });
 

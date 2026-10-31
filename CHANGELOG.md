@@ -4,6 +4,24 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [1.7.0] - 2026-10-31
+
+### Added
+
+- Accounts without a 5-hour limit (Ultra plans with a verified account). Their 5 h meter reads
+  "no limit" instead of looking like a missing reading, and the sidebar shows the 7-day usage of
+  such an account. Failover and thresholds go by the weekly window alone for them.
+- A meter for each model's weekly allowance, such as Fable, read from the `limits` rows of the
+  usage endpoint (and from `seven_day_opus` and `seven_day_sonnet` when those are sent).
+- When a chat runs out of a model's allowance, the account is skipped until that allowance resets
+  instead of being retried after an hour.
+
+### Changed
+
+- The 5-hour and 7-day readings fall back to the `limits` rows when the named fields are missing,
+  so a future change to the endpoint does not blank the meters. Readings cached by earlier
+  versions still load.
+
 ## [1.6.1] - 2026-10-23
 
 ### Fixed

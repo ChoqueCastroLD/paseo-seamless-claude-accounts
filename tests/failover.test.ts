@@ -12,6 +12,8 @@ describe("isLimitNotice", () => {
       "You've hit your weekly limit · resets Oct 28, 9am",
       "You've hit your limit · resets 3pm",
       "You have reached your Opus limit",
+      "You've reached your Fable limit.",
+      "You've hit your Fable limit · resets Nov 3, 1am",
       "Claude AI usage limit reached|1791754200",
     ]) {
       assert.ok(isLimitNotice(text), text);

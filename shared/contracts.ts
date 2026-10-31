@@ -9,6 +9,7 @@ const windowSchema = z.object({
 const usageSchema = z.object({
   fiveHour: windowSchema.nullable(),
   week: windowSchema.nullable(),
+  models: z.array(windowSchema.extend({ model: z.string() })),
   fetchedAt: z.string(),
 });
 

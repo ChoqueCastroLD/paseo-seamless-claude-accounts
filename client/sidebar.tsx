@@ -24,8 +24,11 @@ export function AccountsItem({ currentScreen, openScreen, theme }: PluginSidebar
     refetchInterval: POLL_MS,
   });
   const active = query.data?.accounts.find((account) => account.active);
-  const session = active?.usage?.fiveHour ?? null;
-  const used = session === null ? null : session.percent;
+  // Without a 5-hour window, the weekly one is what runs out.
+  const usage = active?.usage ?? null;
+  const reading = usage?.fiveHour ?? usage?.week ?? null;
+  const used = reading === null ? null : reading.percent;
+  const label = text.t(usage?.fiveHour == null ? "week" : "session");
   return (
     <SidebarRow
       icon="Users"
@@ -35,7 +38,7 @@ export function AccountsItem({ currentScreen, openScreen, theme }: PluginSidebar
       trailing={
         used === null ? undefined : (
           <Text
-            accessibilityLabel={`${text.t("session")} ${Math.round(used)}%`}
+            accessibilityLabel={`${label} ${Math.round(used)}%`}
             style={{ color: meterColor(theme.colors, used), fontSize: 11, fontWeight: "600" }}
           >
             {Math.round(used)}%

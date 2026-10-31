@@ -53,19 +53,22 @@ you and tell the chat to carry on.
 - **Accounts per project and per workspace.** Keep a work account for the work project only, or
   pick the accounts of a single workspace from its header. Everything is allowed by default, so
   new and quickly created workspaces just work. Open chats follow every change immediately.
-- **Automatic failover.** When a chat stops with _"You've hit your session limit"_, the plugin
-  moves to the account with the most allowance left and resumes every chat that stopped.
+- **Automatic failover.** When a chat stops with _"You've hit your session limit"_ (or its weekly,
+  Opus, Sonnet or Fable limit), the plugin moves to the account with the most allowance left and
+  resumes every chat that stopped.
 - **Preemptive thresholds.** Optionally switch before the limit, when the 5-hour window reaches
   one percentage or the 7-day window reaches another, whichever comes first.
-- **Live usage meters.** Each account shows its 5-hour and 7-day usage and when each window
-  resets. The last reading of an idle account is kept, so you still see where it stood.
+- **Live usage meters.** Each account shows its 5-hour and 7-day usage, the weekly allowance of
+  each model that has one (such as Fable), and when each window resets. Plans without a 5-hour
+  limit, like Ultra with a verified account, read "no limit" there. The last reading of an idle
+  account is kept, so you still see where it stood.
 - **Add accounts without a terminal.** The daemon runs `claude auth login`; you open the link,
   paste the code, done. Expired sign-ins are renewed the same way.
 - **Tokens never go stale.** Claude Code rotates refresh tokens while an account is live. The
   plugin saves them back into that account's profile, so switching back never needs a new login.
 - **No account is ever lost.** A live login without a profile is saved into one before anything
   replaces it.
-- **Everywhere in Paseo.** A sidebar row with the active account and its 5-hour session usage, a full screen,
+- **Everywhere in Paseo.** A sidebar row with the active account and its 5-hour usage (7-day on plans without a 5-hour limit), a full screen,
   a settings page, `⌘K` entries for every account, and `/account <name>` (or `/cuenta`) in the
   composer. Each automatic switch leaves a note in the chats it touched.
 - **English and Spanish**, following the device language or a setting.
@@ -305,6 +308,10 @@ See [SECURITY.md](SECURITY.md) to report a vulnerability.
   happens with plain `claude auth login`, and is tracked upstream in
   [getpaseo/paseo#6457](https://github.com/getpaseo/paseo/issues/6457) with a fix in
   [#6460](https://github.com/getpaseo/paseo/pull/6460). The plugin's own screen is not affected.
+- **A model's weekly limit counts for the whole account.** Accounts follow workspaces, not models,
+  so when a chat runs out of its Fable allowance the workspace moves to another account until that
+  allowance resets, even though other models could still run there. Model allowances do not
+  trigger the preemptive thresholds.
 - **Auto-resume replays nothing.** The resume prompt is a new message; attachments and tool
   effects of the stopped turn are not repeated.
 

@@ -2,6 +2,7 @@ import { Icon, Modal } from "@getpaseo/plugin/client/react-native";
 import { useState } from "react";
 import { Pressable, Text, View } from "react-native";
 import type { Account } from "../shared/contracts";
+import { noSessionLimit } from "../shared/usage";
 import type { Strings } from "./i18n";
 import { meterColor, type Styles } from "./styles";
 
@@ -11,24 +12,27 @@ const STALE_MS = 5 * 60_000;
 interface MeterProps {
   label: string;
   reading: { percent: number; resetsAt: string | null } | null;
+  // The account has no such window at all, as opposed to no reading of it yet.
+  unlimited?: boolean;
   now: number;
   s: Styles;
   text: Strings;
 }
 
-function Meter({ label, reading, now, s, text }: MeterProps) {
+function Meter({ label, reading, unlimited = false, now, s, text }: MeterProps) {
   const percent = reading === null ? null : Math.round(reading.percent);
+  const empty = unlimited ? text.t("noLimit") : text.t("noReading");
   return (
     <View
       style={s.meter}
       accessible
       accessibilityRole="progressbar"
       accessibilityLabel={label}
-      accessibilityValue={percent === null ? { text: text.t("noReading") } : { min: 0, max: 100, now: percent }}
+      accessibilityValue={percent === null ? { text: empty } : { min: 0, max: 100, now: percent }}
     >
       <View style={s.meterHead}>
         <Text style={s.meterLabel}>{label}</Text>
-        <Text style={s.meterValue}>{percent === null ? "–" : `${percent}%`}</Text>
+        <Text style={s.meterValue}>{percent !== null ? `${percent}%` : unlimited ? text.t("noLimit") : "–"}</Text>
       </View>
       <View style={s.track}>
         <View
@@ -228,8 +232,25 @@ export function AccountCard({ account, count, nameOf, busy, now, s, text, action
 
       {account.status === "no-login" ? null : (
         <View style={s.meters}>
-          <Meter label={text.t("session")} reading={account.usage?.fiveHour ?? null} now={now} s={s} text={text} />
+          <Meter
+            label={text.t("session")}
+            reading={account.usage?.fiveHour ?? null}
+            unlimited={noSessionLimit(account.usage)}
+            now={now}
+            s={s}
+            text={text}
+          />
           <Meter label={text.t("week")} reading={account.usage?.week ?? null} now={now} s={s} text={text} />
+          {(account.usage?.models ?? []).map((window) => (
+            <Meter
+              key={window.model}
+              label={text.t("modelWeek", { model: window.model })}
+              reading={window}
+              now={now}
+              s={s}
+              text={text}
+            />
+          ))}
         </View>
       )}
 

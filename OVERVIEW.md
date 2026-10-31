@@ -39,8 +39,9 @@ the link it gives and paste the code back.
 
 ## What you get
 
-- A screen with each account's 5-hour and 7-day usage, reset times and sign-in status, plus
-  rename, remove and sign in again.
+- A screen with each account's 5-hour and 7-day usage, per-model weekly allowances such as Fable,
+  reset times and sign-in status, plus rename, remove and sign in again. Plans without a 5-hour
+  limit show "no limit" there.
 - A sidebar row with the active account and how full it is.
 - Command Center entries for every account and `/account <name>` in the composer.
 - Priority order, per-project accounts from each account's menu, and per-workspace accounts from

@@ -13,24 +13,65 @@ export interface UsageWindow {
   resetsAt: string | null;
 }
 
+export interface ModelWindow extends UsageWindow {
+  // The model the weekly allowance is for, as Anthropic names it ("Fable").
+  model: string;
+}
+
 export interface Usage {
+  // Null when the plan has no 5-hour window (Ultra with a verified account).
   fiveHour: UsageWindow | null;
   week: UsageWindow | null;
+  // Weekly allowances of single models, on top of the weekly one.
+  models: ModelWindow[];
   fetchedAt: string;
 }
+
+// Older endpoints named the model windows as fields instead of `limits` rows.
+const LEGACY_MODELS: Record<string, string> = { seven_day_opus: "Opus", seven_day_sonnet: "Sonnet" };
 
 export function parseUsage(body: unknown, now: number): Usage | null {
   if (typeof body !== "object" || body === null) return null;
   const record = body as Record<string, unknown>;
-  const fiveHour = parseWindow(record.five_hour);
-  const week = parseWindow(record.seven_day);
+  const rows = Array.isArray(record.limits) ? record.limits.filter(isRecord) : [];
+  // `limits` is the newer listing; the named fields stay the source while they are sent.
+  const row = (kind: string) => rows.find((candidate) => candidate.kind === kind && candidate.scope == null);
+  const fiveHour = parseWindow(record.five_hour) ?? (record.five_hour === undefined ? parseRow(row("session")) : null);
+  const week = parseWindow(record.seven_day) ?? (record.seven_day === undefined ? parseRow(row("weekly_all")) : null);
   if (fiveHour === null && week === null) return null;
-  return { fiveHour, week, fetchedAt: new Date(now).toISOString() };
+
+  const models: ModelWindow[] = [];
+  for (const candidate of rows) {
+    const model = modelOf(candidate);
+    const window = parseRow(candidate);
+    if (model !== null && window !== null && !models.some((known) => known.model === model)) {
+      models.push({ model, ...window });
+    }
+  }
+  for (const [field, model] of Object.entries(LEGACY_MODELS)) {
+    const window = parseWindow(record[field]);
+    if (window !== null && !models.some((known) => known.model === model)) models.push({ model, ...window });
+  }
+  return { fiveHour, week, models, fetchedAt: new Date(now).toISOString() };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function modelOf(row: Record<string, unknown>): string | null {
+  if (row.kind !== "weekly_scoped" || !isRecord(row.scope) || !isRecord(row.scope.model)) return null;
+  const name = row.scope.model.display_name;
+  return typeof name === "string" && name.trim() !== "" ? name.trim() : null;
+}
+
+function parseRow(row: Record<string, unknown> | undefined): UsageWindow | null {
+  return row === undefined ? null : parseWindow({ utilization: row.percent, resets_at: row.resets_at });
 }
 
 function parseWindow(value: unknown): UsageWindow | null {
-  if (typeof value !== "object" || value === null) return null;
-  const { utilization, resets_at: resetsAt } = value as Record<string, unknown>;
+  if (!isRecord(value)) return null;
+  const { utilization, resets_at: resetsAt } = value;
   const percent = typeof utilization === "string" ? Number(utilization) : utilization;
   if (typeof percent !== "number" || !Number.isFinite(percent)) return null;
   return {
@@ -40,9 +81,11 @@ function parseWindow(value: unknown): UsageWindow | null {
   };
 }
 
+// A chat that ran out on a model's allowance keeps running out until that window resets, so a full
+// model window counts here too.
 export function fullUntil(usage: Usage | null): string | null {
   if (usage === null) return null;
-  const resets = [usage.fiveHour, usage.week]
+  const resets = [usage.fiveHour, usage.week, ...usage.models]
     .flatMap((window) =>
       window !== null && window.percent >= 100 && window.resetsAt !== null ? [window.resetsAt] : [],
     )
@@ -81,8 +124,13 @@ export class UsageReader {
     this.#loaded ??= readFile(this.#cacheFile, "utf8")
       .then((raw) => {
         for (const [key, usage] of Object.entries(JSON.parse(raw) as Record<string, Usage>)) {
+          // Readings cached before 1.7 have no model windows.
           if (!this.#entries.has(key))
-            this.#entries.set(key, { usage, askedAt: Number.NEGATIVE_INFINITY, failedAt: null });
+            this.#entries.set(key, {
+              usage: { ...usage, models: usage.models ?? [] },
+              askedAt: Number.NEGATIVE_INFINITY,
+              failedAt: null,
+            });
         }
       })
       .catch(() => undefined);
